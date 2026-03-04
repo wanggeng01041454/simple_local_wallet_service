@@ -1,2 +1,4 @@
-// Placeholder — frontend-dist will be embedded here in Task 15.
-// For now, returns an empty dir sentinel so the crate compiles.
+use include_dir::{include_dir, Dir};
+
+pub static FRONTEND_DIR: Dir<'_> =
+    include_dir!("$CARGO_MANIFEST_DIR/frontend-dist");

@@ -226,15 +226,27 @@ async fn serve_frontend(uri: axum::http::Uri) -> axum::response::Response<axum::
     let path = uri.path().trim_start_matches('/');
     let path = if path.is_empty() { "index.html" } else { path };
 
-    // Try to serve embedded frontend file; fall back to index.html for SPA routing.
-    // The actual Dir will be wired in Task 15 when include_dir is set up.
-    // For now always return a placeholder so admin routes work.
-    let html = b"<html><body>Admin UI (frontend not yet embedded)</body></html>";
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, if path.ends_with(".html") || path == "index.html" { "text/html" } else { "application/octet-stream" })
-        .body(Body::from(html.as_ref()))
-        .unwrap()
+    let dir = &crate::static_files::FRONTEND_DIR;
+
+    match dir.get_file(path) {
+        Some(file) => {
+            let mime = mime_guess::from_path(path).first_or_octet_stream();
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, mime.as_ref())
+                .body(Body::from(file.contents()))
+                .unwrap()
+        }
+        None => {
+            // SPA fallback — serve index.html for all unknown routes
+            let index = dir.get_file("index.html").unwrap();
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "text/html")
+                .body(Body::from(index.contents()))
+                .unwrap()
+        }
+    }
 }
 
 #[cfg(test)]
