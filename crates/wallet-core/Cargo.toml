@@ -1,0 +1,27 @@
+[package]
+name = "wallet-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+aes-gcm = "0.10"
+pbkdf2 = { version = "0.12", features = ["hmac"] }
+sha2 = "0.10"
+rand = "0.8"
+serde = { workspace = true }
+serde_json = { workspace = true }
+base64 = "0.22"
+thiserror = { workspace = true }
+tracing = { workspace = true }
+reqwest = { version = "0.12", features = ["json"] }
+tokio = { workspace = true }
+solana-sdk = "2"
+alloy = { version = "1", features = ["full"] }
+dirs = "5"
+chrono = { version = "0.4", features = ["serde"] }
+bs58 = "0.5"
+hex = "0.4"
+
+[dev-dependencies]
+tokio-test = "0.4"
+tempfile = "3"
