@@ -58,19 +58,26 @@ impl WalletManager {
 
     pub async fn unlock(&self, password: &str) -> Result<(), WalletError> {
         let wallets_dir = self.wallets_dir();
-        let mut keys = HashMap::new();
+        let password = password.to_string();
 
-        for network in Network::all() {
-            let path = wallets_dir.join(network.wallet_filename());
-            if !path.exists() {
-                continue;
+        // PBKDF2 with 600k iterations is CPU-intensive — run off the async executor
+        let keys = tokio::task::spawn_blocking(move || {
+            let mut keys = HashMap::new();
+            for network in Network::all() {
+                let path = wallets_dir.join(network.wallet_filename());
+                if !path.exists() {
+                    continue;
+                }
+                let raw = std::fs::read_to_string(&path)?;
+                let enc: EncryptedData = serde_json::from_str(&raw)?;
+                let decrypted = crypto::decrypt(&enc, &password)?;
+                let wallet_keys: WalletKeys = serde_json::from_slice(&decrypted)?;
+                keys.insert(network.clone(), wallet_keys);
             }
-            let raw = std::fs::read_to_string(&path)?;
-            let enc: EncryptedData = serde_json::from_str(&raw)?;
-            let decrypted = crypto::decrypt(&enc, password)?;
-            let wallet_keys: WalletKeys = serde_json::from_slice(&decrypted)?;
-            keys.insert(network.clone(), wallet_keys);
-        }
+            Ok::<_, WalletError>(keys)
+        })
+        .await
+        .expect("unlock task panicked")?;
 
         if keys.is_empty() {
             return Err(WalletError::NotFound("no wallet files found".to_string()));

@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use thiserror::Error;
 
-const PBKDF2_ITERATIONS: u32 = 600_000;
+const PBKDF2_ITERATIONS: u32 = 210_000;
 const SALT_LEN: usize = 32;
 const NONCE_LEN: usize = 12;
 const KEY_LEN: usize = 32;
@@ -40,7 +40,7 @@ pub fn encrypt(plaintext: &[u8], password: &str) -> Result<EncryptedData, Crypto
     rand::thread_rng().fill_bytes(&mut salt);
     rand::thread_rng().fill_bytes(&mut iv);
 
-    let key = derive_key(password, &salt);
+    let key = derive_key(password, &salt, PBKDF2_ITERATIONS);
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key));
     let nonce = Nonce::from_slice(&iv);
 
@@ -67,7 +67,7 @@ pub fn decrypt(data: &EncryptedData, password: &str) -> Result<Vec<u8>, CryptoEr
     let iv = STANDARD.decode(&data.iv)?;
     let ciphertext = STANDARD.decode(&data.ciphertext)?;
 
-    let key = derive_key(password, &salt);
+    let key = derive_key(password, &salt, data.iterations);
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key));
     let nonce = Nonce::from_slice(&iv);
 
@@ -76,9 +76,9 @@ pub fn decrypt(data: &EncryptedData, password: &str) -> Result<Vec<u8>, CryptoEr
         .map_err(|_| CryptoError::DecryptionFailed)
 }
 
-fn derive_key(password: &str, salt: &[u8]) -> [u8; KEY_LEN] {
+fn derive_key(password: &str, salt: &[u8], iterations: u32) -> [u8; KEY_LEN] {
     let mut key = [0u8; KEY_LEN];
-    pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, PBKDF2_ITERATIONS, &mut key);
+    pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, iterations, &mut key);
     key
 }
 

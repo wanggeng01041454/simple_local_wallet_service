@@ -8,19 +8,24 @@ export default function Unlock() {
   const { refresh } = useApp()
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
 
   const handleUnlock = async () => {
+    setError('')
+    setLoading(true)
     try {
       await axios.post('/api/admin/unlock', { password })
       await refresh()
       navigate('/dashboard')
     } catch (e: any) {
       setError(e.response?.data?.error ?? 'Failed to unlock')
+    } finally {
+      setLoading(false)
     }
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') handleUnlock()
+    if (e.key === 'Enter' && !loading) handleUnlock()
   }
 
   return (
@@ -35,9 +40,12 @@ export default function Unlock() {
           value={password}
           onChange={e => setPassword(e.target.value)}
           onKeyDown={handleKeyDown}
+          disabled={loading}
         />
       </div>
-      <button className="btn-block" onClick={handleUnlock}>Unlock</button>
+      <button className="btn-block" onClick={handleUnlock} disabled={loading}>
+        {loading ? 'Unlocking...' : 'Unlock'}
+      </button>
     </div>
   )
 }

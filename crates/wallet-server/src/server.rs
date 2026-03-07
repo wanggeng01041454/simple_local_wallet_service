@@ -8,7 +8,12 @@ pub async fn run(data_dir: PathBuf) -> anyhow::Result<()> {
     let state = AppState::new(data_dir);
 
     let cors = CorsLayer::new()
-        .allow_origin("http://localhost:9292".parse::<HeaderValue>().unwrap())
+        .allow_origin([
+            "http://localhost:9292".parse::<HeaderValue>().unwrap(),
+            "http://127.0.0.1:9292".parse::<HeaderValue>().unwrap(),
+            "http://localhost:5173".parse::<HeaderValue>().unwrap(),
+            "http://127.0.0.1:5173".parse::<HeaderValue>().unwrap(),
+        ])
         .allow_methods([http::Method::GET, http::Method::POST])
         .allow_headers([http::header::CONTENT_TYPE]);
 
