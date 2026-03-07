@@ -9,6 +9,24 @@ pub struct RpcConfig {
     pub eth: String,
     pub bnb: String,
     pub arb: String,
+    #[serde(default = "default_polygon_rpc")]
+    pub polygon: String,
+}
+
+fn default_polygon_rpc() -> String {
+    "https://polygon-rpc.com".to_string()
+}
+
+impl RpcConfig {
+    pub fn url_for(&self, network: &crate::network::Network) -> &str {
+        match network {
+            crate::network::Network::Solana => &self.solana,
+            crate::network::Network::Eth => &self.eth,
+            crate::network::Network::Bnb => &self.bnb,
+            crate::network::Network::Arb => &self.arb,
+            crate::network::Network::Polygon => &self.polygon,
+        }
+    }
 }
 
 impl Default for RpcConfig {
@@ -18,6 +36,7 @@ impl Default for RpcConfig {
             eth: "https://eth.llamarpc.com".to_string(),
             bnb: "https://bsc-dataseed.binance.org".to_string(),
             arb: "https://arb1.arbitrum.io/rpc".to_string(),
+            polygon: "https://polygon-rpc.com".to_string(),
         }
     }
 }

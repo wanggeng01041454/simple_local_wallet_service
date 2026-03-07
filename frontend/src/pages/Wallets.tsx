@@ -2,11 +2,16 @@ import { useEffect, useState } from 'react'
 import axios from 'axios'
 import { Link } from 'react-router-dom'
 
-const NETWORKS = ['solana', 'eth', 'bnb', 'arb'] as const
+const NETWORKS = ['solana', 'eth', 'bnb', 'arb', 'polygon'] as const
+
+interface TokenBalance {
+  token: string
+  balance: string
+}
 
 export default function Wallets() {
   const [addresses, setAddresses] = useState<Record<string, string>>({})
-  const [balances, setBalances] = useState<Record<string, string>>({})
+  const [balances, setBalances] = useState<Record<string, TokenBalance[]>>({})
 
   useEffect(() => {
     NETWORKS.forEach(async network => {
@@ -20,7 +25,7 @@ export default function Wallets() {
         )
         setBalances(prev => ({
           ...prev,
-          [network]: `${balResp.data.balance} ${balResp.data.unit}`,
+          [network]: balResp.data.balances ?? [],
         }))
       } catch {
         // locked or not set up — leave blank
@@ -41,9 +46,16 @@ export default function Wallets() {
           <p className="card-text">
             <strong>Address:</strong> {addresses[network] ?? '—'}
           </p>
-          <p className="card-text" style={{ marginTop: 4 }}>
-            <strong>Balance:</strong> {balances[network] ?? '—'}
-          </p>
+          {(balances[network] ?? []).map(b => (
+            <p className="card-text" style={{ marginTop: 4 }} key={b.token}>
+              <strong>{b.token}:</strong> {b.balance}
+            </p>
+          ))}
+          {!balances[network] && (
+            <p className="card-text" style={{ marginTop: 4 }}>
+              <strong>Balance:</strong> —
+            </p>
+          )}
         </div>
       ))}
     </div>

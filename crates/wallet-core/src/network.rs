@@ -8,11 +8,12 @@ pub enum Network {
     Eth,
     Bnb,
     Arb,
+    Polygon,
 }
 
 impl Network {
     pub fn all() -> &'static [Network] {
-        &[Network::Solana, Network::Eth, Network::Bnb, Network::Arb]
+        &[Network::Solana, Network::Eth, Network::Bnb, Network::Arb, Network::Polygon]
     }
 
     pub fn wallet_filename(&self) -> &'static str {
@@ -21,6 +22,7 @@ impl Network {
             Network::Eth => "eth.enc",
             Network::Bnb => "bnb.enc",
             Network::Arb => "arb.enc",
+            Network::Polygon => "polygon.enc",
         }
     }
 
@@ -30,6 +32,7 @@ impl Network {
             Network::Eth => "Ethereum",
             Network::Bnb => "BNB Chain",
             Network::Arb => "Arbitrum",
+            Network::Polygon => "Polygon",
         }
     }
 }

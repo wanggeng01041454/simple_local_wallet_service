@@ -89,18 +89,29 @@ async fn get_balance(
         return locked_error();
     }
 
-    let address = state
-        .wallet
-        .get_address(&network)
-        .await
-        .unwrap_or_default();
+    let address = match state.wallet.get_address(&network).await {
+        Ok(a) => a,
+        Err(e) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+        }
+    };
+
+    let rpc_url = {
+        let config = state.config.read().await;
+        config.rpc.url_for(&network).to_string()
+    };
+
+    let balances = wallet_core::balance::query_balances(&rpc_url, &network, &address).await;
+
     (
         StatusCode::OK,
         Json(serde_json::json!({
             "network": params.network,
             "address": address,
-            "balance": "0",
-            "unit": params.network.to_uppercase()
+            "balances": balances
         })),
     )
 }
@@ -160,7 +171,7 @@ async fn sign_transaction(
 
     let signature = match network {
         Network::Solana => wallet_core::solana_wallet::sign_message(&private_key, &tx_bytes),
-        Network::Eth | Network::Bnb | Network::Arb => sign_evm_message(&private_key, &tx_bytes),
+        Network::Eth | Network::Bnb | Network::Arb | Network::Polygon => sign_evm_message(&private_key, &tx_bytes),
     };
 
     let signature = match signature {
@@ -280,5 +291,158 @@ mod tests {
             .add_query_param("network", "invalid_network")
             .await;
         assert!(resp.status_code() == 503 || resp.status_code() == 400);
+    }
+
+    /// Create wallets for all networks, unlock, return a ready-to-use server.
+    async fn unlocked_server() -> (TestServer, TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let state = AppState::new(dir.path().to_path_buf());
+        let password = "test-password-123";
+
+        // Generate a wallet for every supported network
+        for network in wallet_core::network::Network::all() {
+            let keys = match network {
+                Network::Solana => wallet_core::solana_wallet::generate_keypair(),
+                _ => wallet_core::evm_wallet::generate_keypair(),
+            };
+            state.wallet.save_wallet(network, &keys, password).unwrap();
+        }
+        state.wallet.unlock(password).await.unwrap();
+
+        let app = router(state);
+        (TestServer::new(app).unwrap(), dir)
+    }
+
+    #[tokio::test]
+    async fn sign_eth_returns_valid_signature() {
+        let (server, _dir) = unlocked_server().await;
+        let tx_hash = "a".repeat(64); // 32 bytes in hex
+        let resp = server
+            .post("/api/wallet/sign")
+            .json(&serde_json::json!({
+                "network": "eth",
+                "transaction": tx_hash
+            }))
+            .await;
+        assert_eq!(resp.status_code(), 200);
+        let body: serde_json::Value = resp.json();
+        assert_eq!(body["network"], "eth");
+        let sig = body["signature"].as_str().unwrap();
+        // EVM signature is 65 bytes (r=32 + s=32 + v=1) = 130 hex chars
+        assert_eq!(sig.len(), 130);
+        assert!(body["signed_at"].as_str().is_some());
+    }
+
+    #[tokio::test]
+    async fn sign_bnb_returns_valid_signature() {
+        let (server, _dir) = unlocked_server().await;
+        let tx_hash = "b".repeat(64);
+        let resp = server
+            .post("/api/wallet/sign")
+            .json(&serde_json::json!({
+                "network": "bnb",
+                "transaction": tx_hash
+            }))
+            .await;
+        assert_eq!(resp.status_code(), 200);
+        let body: serde_json::Value = resp.json();
+        assert_eq!(body["network"], "bnb");
+        assert_eq!(body["signature"].as_str().unwrap().len(), 130);
+    }
+
+    #[tokio::test]
+    async fn sign_arb_returns_valid_signature() {
+        let (server, _dir) = unlocked_server().await;
+        let tx_hash = "c".repeat(64);
+        let resp = server
+            .post("/api/wallet/sign")
+            .json(&serde_json::json!({
+                "network": "arb",
+                "transaction": tx_hash
+            }))
+            .await;
+        assert_eq!(resp.status_code(), 200);
+        let body: serde_json::Value = resp.json();
+        assert_eq!(body["network"], "arb");
+        assert_eq!(body["signature"].as_str().unwrap().len(), 130);
+    }
+
+    #[tokio::test]
+    async fn sign_polygon_returns_valid_signature() {
+        let (server, _dir) = unlocked_server().await;
+        let tx_hash = "d".repeat(64);
+        let resp = server
+            .post("/api/wallet/sign")
+            .json(&serde_json::json!({
+                "network": "polygon",
+                "transaction": tx_hash
+            }))
+            .await;
+        assert_eq!(resp.status_code(), 200);
+        let body: serde_json::Value = resp.json();
+        assert_eq!(body["network"], "polygon");
+        assert_eq!(body["signature"].as_str().unwrap().len(), 130);
+    }
+
+    #[tokio::test]
+    async fn sign_solana_returns_valid_signature() {
+        let (server, _dir) = unlocked_server().await;
+        let tx_hash = "e".repeat(64);
+        let resp = server
+            .post("/api/wallet/sign")
+            .json(&serde_json::json!({
+                "network": "solana",
+                "transaction": tx_hash
+            }))
+            .await;
+        assert_eq!(resp.status_code(), 200);
+        let body: serde_json::Value = resp.json();
+        assert_eq!(body["network"], "solana");
+        // Ed25519 signature is 64 bytes = 128 hex chars
+        assert_eq!(body["signature"].as_str().unwrap().len(), 128);
+    }
+
+    #[tokio::test]
+    async fn sign_with_invalid_network_returns_400() {
+        let (server, _dir) = unlocked_server().await;
+        let resp = server
+            .post("/api/wallet/sign")
+            .json(&serde_json::json!({
+                "network": "invalid",
+                "transaction": "a".repeat(64)
+            }))
+            .await;
+        assert_eq!(resp.status_code(), 400);
+        let body: serde_json::Value = resp.json();
+        assert_eq!(body["error"], "invalid_network");
+    }
+
+    #[tokio::test]
+    async fn sign_evm_with_non_32byte_hash_returns_500() {
+        let (server, _dir) = unlocked_server().await;
+        // 16 bytes instead of 32
+        let resp = server
+            .post("/api/wallet/sign")
+            .json(&serde_json::json!({
+                "network": "eth",
+                "transaction": "ab".repeat(16)
+            }))
+            .await;
+        assert_eq!(resp.status_code(), 500);
+    }
+
+    #[tokio::test]
+    async fn sign_with_invalid_hex_returns_400() {
+        let (server, _dir) = unlocked_server().await;
+        let resp = server
+            .post("/api/wallet/sign")
+            .json(&serde_json::json!({
+                "network": "eth",
+                "transaction": "not-valid-hex"
+            }))
+            .await;
+        assert_eq!(resp.status_code(), 400);
+        let body: serde_json::Value = resp.json();
+        assert_eq!(body["error"], "invalid transaction hex");
     }
 }

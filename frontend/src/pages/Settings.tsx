@@ -7,10 +7,11 @@ interface RpcSettings {
   eth: string
   bnb: string
   arb: string
+  polygon: string
 }
 
 export default function Settings() {
-  const [rpc, setRpc] = useState<RpcSettings>({ solana: '', eth: '', bnb: '', arb: '' })
+  const [rpc, setRpc] = useState<RpcSettings>({ solana: '', eth: '', bnb: '', arb: '', polygon: '' })
   const [botToken, setBotToken] = useState('')
   const [chatId, setChatId] = useState('')
   const [password, setPassword] = useState('')
@@ -44,7 +45,7 @@ export default function Settings() {
       {message && <p className="alert-success">{message}</p>}
 
       <h2>RPC Endpoints</h2>
-      {(['solana', 'eth', 'bnb', 'arb'] as const).map(net => (
+      {(['solana', 'eth', 'bnb', 'arb', 'polygon'] as const).map(net => (
         <div className="form-row" key={net}>
           <label htmlFor={`rpc-${net}`}>{net.toUpperCase()} RPC</label>
           <input

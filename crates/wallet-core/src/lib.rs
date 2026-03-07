@@ -1,3 +1,4 @@
+pub mod balance;
 pub mod config;
 pub mod crypto;
 pub mod evm_wallet;

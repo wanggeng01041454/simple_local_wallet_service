@@ -3,7 +3,7 @@ import axios from 'axios'
 import { useNavigate } from 'react-router-dom'
 
 type Step = 'password' | 'wallets'
-const NETWORKS = ['solana', 'eth', 'bnb', 'arb'] as const
+const NETWORKS = ['solana', 'eth', 'bnb', 'arb', 'polygon'] as const
 
 export default function Setup() {
   const navigate = useNavigate()

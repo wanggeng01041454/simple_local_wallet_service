@@ -6,6 +6,7 @@ pub fn parse_network(s: &str) -> Option<Network> {
         "eth" => Some(Network::Eth),
         "bnb" => Some(Network::Bnb),
         "arb" => Some(Network::Arb),
+        "polygon" => Some(Network::Polygon),
         _ => None,
     }
 }

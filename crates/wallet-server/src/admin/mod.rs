@@ -97,7 +97,7 @@ async fn setup_wallet(
     let keys: WalletKeys = match req.action.as_str() {
         "generate" => match network {
             Network::Solana => solana_wallet::generate_keypair(),
-            Network::Eth | Network::Bnb | Network::Arb => evm_wallet::generate_keypair(),
+            Network::Eth | Network::Bnb | Network::Arb | Network::Polygon => evm_wallet::generate_keypair(),
         },
         "import" => {
             let pk = match &req.private_key {
@@ -111,7 +111,7 @@ async fn setup_wallet(
             };
             let result = match network {
                 Network::Solana => solana_wallet::import_from_base58(pk),
-                Network::Eth | Network::Bnb | Network::Arb => evm_wallet::import_from_hex(pk),
+                Network::Eth | Network::Bnb | Network::Arb | Network::Polygon => evm_wallet::import_from_hex(pk),
             };
             match result {
                 Ok(k) => k,
@@ -183,6 +183,7 @@ struct RpcSettingsRequest {
     eth: Option<String>,
     bnb: Option<String>,
     arb: Option<String>,
+    polygon: Option<String>,
 }
 
 async fn save_rpc_settings(
@@ -202,6 +203,9 @@ async fn save_rpc_settings(
     if let Some(url) = req.arb {
         config.rpc.arb = url;
     }
+    if let Some(url) = req.polygon {
+        config.rpc.polygon = url;
+    }
     match config.save() {
         Ok(_) => (StatusCode::OK, Json(serde_json::json!({"status": "saved"}))),
         Err(e) => (
@@ -219,6 +223,7 @@ async fn get_settings(State(state): State<AppState>) -> Json<serde_json::Value> 
             "eth": config.rpc.eth,
             "bnb": config.rpc.bnb,
             "arb": config.rpc.arb,
+            "polygon": config.rpc.polygon,
         }
     }))
 }
