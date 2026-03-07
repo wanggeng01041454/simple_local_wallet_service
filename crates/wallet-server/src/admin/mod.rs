@@ -17,6 +17,7 @@ use crate::util::parse_network;
 
 pub fn router(state: AppState) -> Router {
     Router::new()
+        .route("/api/admin/health", get(health))
         .route("/api/admin/status", get(get_status))
         .route("/api/admin/unlock", post(unlock))
         .route("/api/admin/lock", post(lock))
@@ -26,6 +27,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/admin/settings", get(get_settings))
         .fallback(serve_frontend)
         .with_state(state)
+}
+
+async fn health() -> Json<serde_json::Value> {
+    Json(serde_json::json!({"status": "ok"}))
 }
 
 async fn get_status(State(state): State<AppState>) -> Json<serde_json::Value> {

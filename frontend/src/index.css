@@ -240,3 +240,27 @@ button:focus-visible {
   background-color: #E5E7EB;
   margin: 24px 0;
 }
+
+/* ── Health Dot ── */
+.health-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  animation: blink 1.5s ease-in-out infinite;
+}
+
+.health-alive {
+  background-color: #22C55E;
+  box-shadow: 0 0 4px #22C55E;
+}
+
+.health-dead {
+  background-color: #EF4444;
+  box-shadow: 0 0 4px #EF4444;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}

@@ -1,5 +1,6 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { AppProvider, useApp } from './context/AppContext'
+import HealthDot from './components/HealthDot'
 import Setup from './pages/Setup'
 import Unlock from './pages/Unlock'
 import Dashboard from './pages/Dashboard'
@@ -55,6 +56,9 @@ export default function App() {
   return (
     <BrowserRouter>
       <AppProvider>
+        <div style={{ position: 'fixed', top: 12, right: 12 }}>
+          <HealthDot />
+        </div>
         <AppRoutes />
       </AppProvider>
     </BrowserRouter>
