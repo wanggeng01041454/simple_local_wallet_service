@@ -6,53 +6,47 @@ import Dashboard from './pages/Dashboard'
 import Wallets from './pages/Wallets'
 import Settings from './pages/Settings'
 
-function RequireUnlocked({ children }: { children: React.ReactNode }) {
-  const { status } = useApp()
-  if (status === 'loading') return <div>Loading...</div>
-  if (status === 'setup_required') return <Navigate to="/setup" replace />
-  if (status !== 'unlocked') return <Navigate to="/unlock" replace />
-  return <>{children}</>
-}
-
+/**
+ * Routing rules:
+ *   setup_required → everything goes to /setup
+ *   locked         → everything goes to /unlock (including /setup)
+ *   unlocked       → /setup and /unlock redirect to /dashboard; protected pages are accessible
+ */
 function AppRoutes() {
   const { status } = useApp()
+
   if (status === 'loading') return <div>Loading...</div>
+
+  // No wallet files yet — force /setup for every URL
+  if (status === 'setup_required') {
+    return (
+      <Routes>
+        <Route path="/setup" element={<Setup />} />
+        <Route path="*" element={<Navigate to="/setup" replace />} />
+      </Routes>
+    )
+  }
+
+  // Wallet files exist but locked — force /unlock for every URL
+  if (status === 'locked') {
+    return (
+      <Routes>
+        <Route path="/unlock" element={<Unlock />} />
+        <Route path="*" element={<Navigate to="/unlock" replace />} />
+      </Routes>
+    )
+  }
+
+  // Unlocked — full access; /setup and /unlock redirect to /dashboard
   return (
     <Routes>
-      <Route path="/setup" element={<Setup />} />
-      <Route path="/unlock" element={<Unlock />} />
-      <Route
-        path="/dashboard"
-        element={<RequireUnlocked><Dashboard /></RequireUnlocked>}
-      />
-      <Route
-        path="/wallets"
-        element={<RequireUnlocked><Wallets /></RequireUnlocked>}
-      />
-      <Route
-        path="/settings"
-        element={<RequireUnlocked><Settings /></RequireUnlocked>}
-      />
-      <Route
-        path="/"
-        element={
-          status === 'setup_required' ? (
-            <Navigate to="/setup" replace />
-          ) : status === 'unlocked' ? (
-            <Navigate to="/dashboard" replace />
-          ) : (
-            <Navigate to="/unlock" replace />
-          )
-        }
-      />
-      <Route
-        path="*"
-        element={
-          status === 'unlocked'
-            ? <Navigate to="/dashboard" replace />
-            : <Navigate to="/unlock" replace />
-        }
-      />
+      <Route path="/dashboard" element={<Dashboard />} />
+      <Route path="/wallets" element={<Wallets />} />
+      <Route path="/settings" element={<Settings />} />
+      <Route path="/setup" element={<Navigate to="/dashboard" replace />} />
+      <Route path="/unlock" element={<Navigate to="/dashboard" replace />} />
+      <Route path="/" element={<Navigate to="/dashboard" replace />} />
+      <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>
   )
 }
