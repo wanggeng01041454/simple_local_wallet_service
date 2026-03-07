@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import axios from 'axios'
+import { Link } from 'react-router-dom'
 
 interface RpcSettings {
   solana: string
@@ -34,13 +35,17 @@ export default function Settings() {
   }
 
   return (
-    <div>
+    <div className="page-container">
+      <nav className="nav-bar">
+        <Link to="/dashboard">Dashboard</Link>
+        <Link to="/wallets">Wallets</Link>
+      </nav>
       <h1>Settings</h1>
-      {message && <p>{message}</p>}
+      {message && <p className="alert-success">{message}</p>}
 
       <h2>RPC Endpoints</h2>
       {(['solana', 'eth', 'bnb', 'arb'] as const).map(net => (
-        <div key={net}>
+        <div className="form-row" key={net}>
           <label htmlFor={`rpc-${net}`}>{net.toUpperCase()} RPC</label>
           <input
             id={`rpc-${net}`}
@@ -51,22 +56,30 @@ export default function Settings() {
       ))}
       <button onClick={saveRpc}>Save RPC</button>
 
+      <div className="divider" />
+
       <h2>Telegram Bot</h2>
-      <label htmlFor="bot-token">Bot Token</label>
-      <input
-        id="bot-token"
-        value={botToken}
-        onChange={e => setBotToken(e.target.value)}
-      />
-      <label htmlFor="chat-id">Chat ID</label>
-      <input id="chat-id" value={chatId} onChange={e => setChatId(e.target.value)} />
-      <label htmlFor="tg-password">Wallet Password (to encrypt)</label>
-      <input
-        id="tg-password"
-        type="password"
-        value={password}
-        onChange={e => setPassword(e.target.value)}
-      />
+      <div className="form-row">
+        <label htmlFor="bot-token">Bot Token</label>
+        <input
+          id="bot-token"
+          value={botToken}
+          onChange={e => setBotToken(e.target.value)}
+        />
+      </div>
+      <div className="form-row">
+        <label htmlFor="chat-id">Chat ID</label>
+        <input id="chat-id" value={chatId} onChange={e => setChatId(e.target.value)} />
+      </div>
+      <div className="form-row">
+        <label htmlFor="tg-password">Wallet Password (to encrypt)</label>
+        <input
+          id="tg-password"
+          type="password"
+          value={password}
+          onChange={e => setPassword(e.target.value)}
+        />
+      </div>
       <button onClick={saveTelegram}>Save Telegram</button>
     </div>
   )

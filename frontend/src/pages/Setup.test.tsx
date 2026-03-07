@@ -38,7 +38,8 @@ describe('Setup wizard', () => {
     await userEvent.type(screen.getByLabelText(/^password/i), 'StrongPass123!')
     await userEvent.type(screen.getByLabelText(/confirm password/i), 'StrongPass123!')
     fireEvent.click(screen.getByRole('button', { name: /next/i }))
-    fireEvent.click(screen.getByRole('button', { name: /generate eth/i }))
+    const generateButtons = screen.getAllByRole('button', { name: /^generate$/i })
+    fireEvent.click(generateButtons[1]) // ETH is the second network
     await waitFor(() =>
       expect(mockedAxios.post).toHaveBeenCalledWith(
         '/api/admin/setup/wallet',

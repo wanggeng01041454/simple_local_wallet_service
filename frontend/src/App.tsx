@@ -15,7 +15,7 @@ import Settings from './pages/Settings'
 function AppRoutes() {
   const { status } = useApp()
 
-  if (status === 'loading') return <div>Loading...</div>
+  if (status === 'loading') return <div className="page-container loading">Loading...</div>
 
   // No wallet files yet — force /setup for every URL
   if (status === 'setup_required') {

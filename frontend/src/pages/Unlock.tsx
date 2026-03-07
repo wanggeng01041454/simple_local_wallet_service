@@ -19,18 +19,25 @@ export default function Unlock() {
     }
   }
 
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') handleUnlock()
+  }
+
   return (
-    <div>
+    <div className="page-container">
       <h1>Unlock Wallet</h1>
-      <label htmlFor="password">Password</label>
-      <input
-        id="password"
-        type="password"
-        value={password}
-        onChange={e => setPassword(e.target.value)}
-      />
-      {error && <p role="alert">{error}</p>}
-      <button onClick={handleUnlock}>Unlock</button>
+      {error && <p className="alert-error" role="alert">{error}</p>}
+      <div className="form-row">
+        <label htmlFor="password">Password</label>
+        <input
+          id="password"
+          type="password"
+          value={password}
+          onChange={e => setPassword(e.target.value)}
+          onKeyDown={handleKeyDown}
+        />
+      </div>
+      <button className="btn-block" onClick={handleUnlock}>Unlock</button>
     </div>
   )
 }

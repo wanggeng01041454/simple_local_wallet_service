@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import axios from 'axios'
+import { Link } from 'react-router-dom'
 
 const NETWORKS = ['solana', 'eth', 'bnb', 'arb'] as const
 
@@ -28,13 +29,21 @@ export default function Wallets() {
   }, [])
 
   return (
-    <div>
+    <div className="page-container">
+      <nav className="nav-bar">
+        <Link to="/dashboard">Dashboard</Link>
+        <Link to="/settings">Settings</Link>
+      </nav>
       <h1>Wallets</h1>
       {NETWORKS.map(network => (
-        <div key={network}>
-          <h2>{network.toUpperCase()}</h2>
-          <p>Address: {addresses[network] ?? '—'}</p>
-          <p>Balance: {balances[network] ?? '—'}</p>
+        <div className="card" key={network}>
+          <div className="card-title">{network.toUpperCase()}</div>
+          <p className="card-text">
+            <strong>Address:</strong> {addresses[network] ?? '—'}
+          </p>
+          <p className="card-text" style={{ marginTop: 4 }}>
+            <strong>Balance:</strong> {balances[network] ?? '—'}
+          </p>
         </div>
       ))}
     </div>

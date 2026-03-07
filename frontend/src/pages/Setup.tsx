@@ -61,62 +61,76 @@ export default function Setup() {
 
   if (step === 'password') {
     return (
-      <div>
+      <div className="page-container">
         <h1>Set Password</h1>
-        <label htmlFor="password">Password</label>
-        <input
-          id="password"
-          type="password"
-          value={password}
-          onChange={e => setPassword(e.target.value)}
-        />
-        <label htmlFor="confirm-password">Confirm Password</label>
-        <input
-          id="confirm-password"
-          type="password"
-          value={confirm}
-          onChange={e => setConfirm(e.target.value)}
-        />
-        {error && <p role="alert">{error}</p>}
-        <button onClick={handlePasswordNext}>Next</button>
+        {error && <p className="alert-error" role="alert">{error}</p>}
+        <div className="form-row">
+          <label htmlFor="password">Password</label>
+          <input
+            id="password"
+            type="password"
+            value={password}
+            onChange={e => setPassword(e.target.value)}
+          />
+        </div>
+        <div className="form-row">
+          <label htmlFor="confirm-password">Confirm Password</label>
+          <input
+            id="confirm-password"
+            type="password"
+            value={confirm}
+            onChange={e => setConfirm(e.target.value)}
+          />
+        </div>
+        <button className="btn-block" onClick={handlePasswordNext}>Next</button>
       </div>
     )
   }
 
   return (
-    <div>
+    <div className="page-container">
       <h1>Import or Generate Wallets</h1>
-      {error && <p role="alert">{error}</p>}
+      {error && <p className="alert-error" role="alert">{error}</p>}
       {NETWORKS.map(network => (
-        <div key={network}>
-          <strong>{network.toUpperCase()}</strong>
+        <div className="card" key={network}>
+          <div className="card-title">{network.toUpperCase()}</div>
           {createdWallets[network] ? (
-            <span> {createdWallets[network]}</span>
+            <p className="card-text">{createdWallets[network]}</p>
           ) : (
             <>
-              <button onClick={() => generateWallet(network)}>
-                Generate {network.toUpperCase()}
-              </button>
-              <button onClick={() => setImporting(network)}>
-                Import {network.toUpperCase()}
-              </button>
+              <div className="btn-row">
+                <button onClick={() => generateWallet(network)}>Generate</button>
+                <button
+                  className="btn-secondary"
+                  onClick={() => setImporting(importing === network ? null : network)}
+                >
+                  Import
+                </button>
+              </div>
               {importing === network && (
-                <>
-                  <input
-                    value={importKey}
-                    onChange={e => setImportKey(e.target.value)}
-                    placeholder={
-                      network === 'solana' ? 'Base58 private key' : 'Hex private key'
-                    }
-                  />
+                <div style={{ marginTop: 10 }}>
+                  <div className="form-row">
+                    <input
+                      value={importKey}
+                      onChange={e => setImportKey(e.target.value)}
+                      placeholder={
+                        network === 'solana' ? 'Base58 private key' : 'Hex private key'
+                      }
+                    />
+                  </div>
                   <button onClick={() => importWallet(network)}>Confirm Import</button>
-                </>
+                </div>
               )}
             </>
           )}
         </div>
       ))}
-      <button onClick={handleFinish} disabled={Object.keys(createdWallets).length === 0}>
+      <button
+        className="btn-block"
+        onClick={handleFinish}
+        disabled={Object.keys(createdWallets).length === 0}
+        style={{ marginTop: 8 }}
+      >
         Finish Setup
       </button>
     </div>
