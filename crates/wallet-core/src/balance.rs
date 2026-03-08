@@ -1,7 +1,8 @@
 use crate::network::Network;
 use serde::Serialize;
+use utoipa::ToSchema;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct TokenBalance {
     pub token: String,
     pub balance: String,

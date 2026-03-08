@@ -19,6 +19,7 @@ anyhow = { workspace = true }
 hex = "0.4"
 chrono = { version = "0.4", features = ["serde"] }
 alloy = { version = "1", features = ["signers", "signer-local"] }
+utoipa = { workspace = true }
 
 [dev-dependencies]
 axum-test = "15"

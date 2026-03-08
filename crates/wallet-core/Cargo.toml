@@ -21,6 +21,7 @@ dirs = "5"
 chrono = { version = "0.4", features = ["serde"] }
 bs58 = "0.5"
 hex = "0.4"
+utoipa = { workspace = true }
 
 [dev-dependencies]
 tokio-test = "0.4"

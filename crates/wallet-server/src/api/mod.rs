@@ -5,8 +5,10 @@ use axum::{
     Json, Router,
 };
 use chrono::Utc;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use utoipa::{IntoParams, OpenApi, ToSchema};
 use wallet_core::{
+    balance::TokenBalance,
     network::Network,
     notification::{format_locked_message, format_sign_message, SignEvent},
 };
@@ -14,18 +16,121 @@ use wallet_core::{
 use crate::state::AppState;
 use crate::util::parse_network;
 
+// ---------------------------------------------------------------------------
+// OpenAPI doc
+// ---------------------------------------------------------------------------
+
+#[derive(OpenApi)]
+#[openapi(
+    info(
+        title = "Simple Local Wallet Service API",
+        description = "本地钱包服务的对外 API（端口 9293），提供多链钱包地址查询、余额查询和交易签名功能。\n\n支持的网络：solana、eth、bnb、arb、polygon\n\n**注意**：所有接口均要求钱包处于已解锁状态，否则返回 503 Service Unavailable。钱包的解锁/锁定操作通过管理端口 9292 进行。",
+        version = "1.0.0",
+    ),
+    servers(
+        (url = "http://127.0.0.1:9293", description = "本地 API 服务"),
+    ),
+    paths(get_address, get_balance, sign_transaction),
+    components(schemas(
+        Network,
+        TokenBalance,
+        AddressResponse,
+        BalanceResponse,
+        SignRequest,
+        SignMetadata,
+        SignResponse,
+        ErrorResponse,
+    ))
+)]
+pub struct ApiDoc;
+
+// ---------------------------------------------------------------------------
+// Router
+// ---------------------------------------------------------------------------
+
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/api/wallet/address", get(get_address))
         .route("/api/wallet/balance", get(get_balance))
         .route("/api/wallet/sign", post(sign_transaction))
+        .route("/api/docs/openapi.json", get(serve_openapi))
         .with_state(state)
 }
 
-#[derive(Deserialize)]
+async fn serve_openapi() -> Json<utoipa::openapi::OpenApi> {
+    Json(ApiDoc::openapi())
+}
+
+// ---------------------------------------------------------------------------
+// Schemas
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize, IntoParams)]
 struct NetworkQuery {
+    /// 区块链网络标识：solana, eth, bnb, arb, polygon
     network: String,
 }
+
+#[derive(Serialize, ToSchema)]
+struct AddressResponse {
+    /// 区块链网络
+    network: String,
+    /// 钱包地址
+    address: String,
+}
+
+#[derive(Serialize, ToSchema)]
+struct BalanceResponse {
+    /// 区块链网络
+    network: String,
+    /// 钱包地址
+    address: String,
+    /// 代币余额列表（原生代币 + USDT + USDC）
+    balances: Vec<TokenBalance>,
+}
+
+#[derive(Deserialize, ToSchema)]
+struct SignRequest {
+    /// 区块链网络标识
+    network: String,
+    /// 待签名的交易数据（hex 编码，不含 0x 前缀）。EVM 链必须为 32 字节哈希（64 个 hex 字符）。
+    transaction: String,
+    /// 可选的签名元数据，用于 Telegram 通知
+    metadata: Option<SignMetadata>,
+}
+
+#[derive(Deserialize, ToSchema)]
+struct SignMetadata {
+    /// 目标地址
+    to: Option<String>,
+    /// 转账金额描述
+    value: Option<String>,
+    /// 交易说明
+    description: Option<String>,
+}
+
+#[derive(Serialize, ToSchema)]
+struct SignResponse {
+    /// 区块链网络
+    network: String,
+    /// 签名结果（hex 编码）。EVM：130 hex = 65 字节；Solana：128 hex = 64 字节。
+    signature: String,
+    /// 签名时间（UTC）
+    signed_at: String,
+}
+
+#[derive(Serialize, ToSchema)]
+struct ErrorResponse {
+    /// 错误标识
+    error: String,
+    /// 详细错误信息
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Handlers
+// ---------------------------------------------------------------------------
 
 fn locked_error() -> (StatusCode, Json<serde_json::Value>) {
     (
@@ -37,6 +142,19 @@ fn locked_error() -> (StatusCode, Json<serde_json::Value>) {
     )
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/wallet/address",
+    params(NetworkQuery),
+    responses(
+        (status = 200, description = "成功返回钱包地址", body = AddressResponse),
+        (status = 400, description = "无效的网络参数", body = ErrorResponse),
+        (status = 404, description = "该网络尚未创建钱包", body = ErrorResponse),
+        (status = 503, description = "钱包未解锁", body = ErrorResponse),
+    ),
+    summary = "查询钱包地址",
+    description = "根据网络名称返回对应的钱包地址。",
+)]
 async fn get_address(
     State(state): State<AppState>,
     Query(params): Query<NetworkQuery>,
@@ -70,6 +188,19 @@ async fn get_address(
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/wallet/balance",
+    params(NetworkQuery),
+    responses(
+        (status = 200, description = "成功返回余额列表", body = BalanceResponse),
+        (status = 400, description = "无效的网络参数", body = ErrorResponse),
+        (status = 404, description = "该网络尚未创建钱包", body = ErrorResponse),
+        (status = 503, description = "钱包未解锁", body = ErrorResponse),
+    ),
+    summary = "查询钱包余额",
+    description = "查询指定网络钱包的链上真实余额，返回原生代币 + USDT + USDC 三种资产的余额。\n\n余额通过 JSON-RPC 实时查询链上数据。单个代币查询失败时不影响其他代币，失败的代币余额返回 \"0\"。",
+)]
 async fn get_balance(
     State(state): State<AppState>,
     Query(params): Query<NetworkQuery>,
@@ -116,20 +247,19 @@ async fn get_balance(
     )
 }
 
-#[derive(Deserialize)]
-struct SignRequest {
-    network: String,
-    transaction: String,
-    metadata: Option<SignMetadata>,
-}
-
-#[derive(Deserialize)]
-struct SignMetadata {
-    to: Option<String>,
-    value: Option<String>,
-    description: Option<String>,
-}
-
+#[utoipa::path(
+    post,
+    path = "/api/wallet/sign",
+    request_body = SignRequest,
+    responses(
+        (status = 200, description = "签名成功", body = SignResponse),
+        (status = 400, description = "请求参数错误（无效网络名或无效 hex）", body = ErrorResponse),
+        (status = 500, description = "签名过程出错", body = ErrorResponse),
+        (status = 503, description = "钱包未解锁", body = ErrorResponse),
+    ),
+    summary = "签名交易",
+    description = "使用指定网络的私钥对交易数据进行签名。\n\n- **EVM 链**（eth/bnb/arb/polygon）：输入必须是 32 字节的交易哈希（64 个 hex 字符），返回 65 字节的 ECDSA 签名（r + s + v）。\n- **Solana**：输入为任意长度的交易数据（hex 编码），返回 64 字节的 Ed25519 签名。",
+)]
 async fn sign_transaction(
     State(state): State<AppState>,
     Json(req): Json<SignRequest>,
@@ -444,5 +574,20 @@ mod tests {
         assert_eq!(resp.status_code(), 400);
         let body: serde_json::Value = resp.json();
         assert_eq!(body["error"], "invalid transaction hex");
+    }
+
+    #[tokio::test]
+    async fn openapi_json_endpoint_returns_valid_spec() {
+        let (server, _dir) = locked_server();
+        let resp = server.get("/api/docs/openapi.json").await;
+        assert_eq!(resp.status_code(), 200);
+        let body: serde_json::Value = resp.json();
+        assert_eq!(body["openapi"], "3.1.0");
+        assert!(body["paths"]["/api/wallet/address"].is_object());
+        assert!(body["paths"]["/api/wallet/balance"].is_object());
+        assert!(body["paths"]["/api/wallet/sign"].is_object());
+        assert!(body["components"]["schemas"]["Network"].is_object());
+        assert!(body["components"]["schemas"]["TokenBalance"].is_object());
+        assert!(body["components"]["schemas"]["SignRequest"].is_object());
     }
 }
