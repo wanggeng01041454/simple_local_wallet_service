@@ -12,8 +12,8 @@ pub fn generate_keypair() -> WalletKeys {
 
 pub fn import_from_hex(hex_key: &str) -> Result<WalletKeys, WalletError> {
     let hex_key = hex_key.trim_start_matches("0x");
-    let bytes = hex::decode(hex_key)
-        .map_err(|e| WalletError::NotFound(format!("invalid hex: {e}")))?;
+    let bytes =
+        hex::decode(hex_key).map_err(|e| WalletError::NotFound(format!("invalid hex: {e}")))?;
     import_from_bytes(&bytes)
 }
 

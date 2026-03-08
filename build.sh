@@ -13,4 +13,4 @@ echo "==> Building Rust binary (release)..."
 (cd "$ROOT_DIR" && cargo build --release)
 
 echo ""
-echo "Done. Binary: $ROOT_DIR/target/release/wallet-cli"
+echo "Done. Binary: $ROOT_DIR/target/release/local-wallet"

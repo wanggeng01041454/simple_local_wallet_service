@@ -87,6 +87,27 @@ impl WalletManager {
         Ok(())
     }
 
+    pub async fn verify_password(&self, password: &str) -> Result<(), WalletError> {
+        let wallets_dir = self.wallets_dir();
+        let password = password.to_string();
+
+        tokio::task::spawn_blocking(move || {
+            for network in Network::all() {
+                let path = wallets_dir.join(network.wallet_filename());
+                if !path.exists() {
+                    continue;
+                }
+                let raw = std::fs::read_to_string(&path)?;
+                let enc: EncryptedData = serde_json::from_str(&raw)?;
+                crypto::decrypt(&enc, &password)?;
+                return Ok(());
+            }
+            Err(WalletError::NotFound("no wallet files found".to_string()))
+        })
+        .await
+        .expect("verify password task panicked")
+    }
+
     pub async fn get_address(&self, network: &Network) -> Result<String, WalletError> {
         match &*self.state.read().await {
             WalletState::Locked => Err(WalletError::Locked),

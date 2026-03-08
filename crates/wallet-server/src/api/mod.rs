@@ -289,8 +289,26 @@ async fn sign_transaction(
         }
     };
 
+    if matches!(
+        network,
+        Network::Eth | Network::Bnb | Network::Arb | Network::Polygon
+    ) && tx_bytes.len() != 32
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "EVM tx must be a 32-byte hash"})),
+        );
+    }
+
     let private_key = match state.wallet.get_private_key_bytes(&network).await {
         Ok(k) => k,
+        Err(wallet_core::wallet::WalletError::Locked) => return locked_error(),
+        Err(wallet_core::wallet::WalletError::NotFound(_)) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "wallet not found for network"})),
+            )
+        }
         Err(e) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -301,7 +319,9 @@ async fn sign_transaction(
 
     let signature = match network {
         Network::Solana => wallet_core::solana_wallet::sign_message(&private_key, &tx_bytes),
-        Network::Eth | Network::Bnb | Network::Arb | Network::Polygon => sign_evm_message(&private_key, &tx_bytes),
+        Network::Eth | Network::Bnb | Network::Arb | Network::Polygon => {
+            sign_evm_message(&private_key, &tx_bytes)
+        }
     };
 
     let signature = match signature {
@@ -443,6 +463,21 @@ mod tests {
         (TestServer::new(app).unwrap(), dir)
     }
 
+    async fn partially_unlocked_server() -> (TestServer, TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let state = AppState::new(dir.path().to_path_buf());
+        let password = "test-password-123";
+        let keys = wallet_core::evm_wallet::generate_keypair();
+        state
+            .wallet
+            .save_wallet(&Network::Eth, &keys, password)
+            .unwrap();
+        state.wallet.unlock(password).await.unwrap();
+
+        let app = router(state);
+        (TestServer::new(app).unwrap(), dir)
+    }
+
     #[tokio::test]
     async fn sign_eth_returns_valid_signature() {
         let (server, _dir) = unlocked_server().await;
@@ -548,7 +583,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sign_evm_with_non_32byte_hash_returns_500() {
+    async fn sign_evm_with_non_32byte_hash_returns_400() {
         let (server, _dir) = unlocked_server().await;
         // 16 bytes instead of 32
         let resp = server
@@ -558,7 +593,20 @@ mod tests {
                 "transaction": "ab".repeat(16)
             }))
             .await;
-        assert_eq!(resp.status_code(), 500);
+        assert_eq!(resp.status_code(), 400);
+    }
+
+    #[tokio::test]
+    async fn sign_returns_404_when_wallet_missing_for_network() {
+        let (server, _dir) = partially_unlocked_server().await;
+        let resp = server
+            .post("/api/wallet/sign")
+            .json(&serde_json::json!({
+                "network": "polygon",
+                "transaction": "a".repeat(64)
+            }))
+            .await;
+        assert_eq!(resp.status_code(), 404);
     }
 
     #[tokio::test]

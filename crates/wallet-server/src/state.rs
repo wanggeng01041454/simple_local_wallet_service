@@ -25,8 +25,7 @@ impl AppState {
         let config = self.config.read().await;
         match config.load_telegram(password) {
             Ok(Some(tg)) => {
-                *self.telegram.write().await =
-                    Some(TelegramClient::new(tg.bot_token, tg.chat_id));
+                *self.telegram.write().await = Some(TelegramClient::new(tg.bot_token, tg.chat_id));
             }
             Ok(None) => {}
             Err(e) => tracing::error!("failed to load telegram config: {e}"),

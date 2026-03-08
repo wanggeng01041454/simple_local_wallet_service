@@ -10,15 +10,23 @@ interface RpcSettings {
   polygon: string
 }
 
+const EMPTY_RPC: RpcSettings = {
+  solana: '',
+  eth: '',
+  bnb: '',
+  arb: '',
+  polygon: '',
+}
+
 export default function Settings() {
-  const [rpc, setRpc] = useState<RpcSettings>({ solana: '', eth: '', bnb: '', arb: '', polygon: '' })
+  const [rpc, setRpc] = useState<RpcSettings>(EMPTY_RPC)
   const [botToken, setBotToken] = useState('')
   const [chatId, setChatId] = useState('')
   const [password, setPassword] = useState('')
   const [message, setMessage] = useState('')
 
   useEffect(() => {
-    axios.get('/api/admin/settings').then(resp => setRpc(resp.data.rpc))
+    axios.get('/api/admin/settings').then(resp => setRpc({ ...EMPTY_RPC, ...resp.data.rpc }))
   }, [])
 
   const saveRpc = async () => {

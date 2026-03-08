@@ -6,10 +6,7 @@ use axum::{
 };
 use serde::Deserialize;
 use wallet_core::{
-    config::TelegramConfig,
-    evm_wallet, solana_wallet,
-    network::Network,
-    wallet::WalletKeys,
+    config::TelegramConfig, evm_wallet, network::Network, solana_wallet, wallet::WalletKeys,
 };
 
 use crate::state::AppState;
@@ -54,7 +51,10 @@ async fn unlock(
     match state.wallet.unlock(&req.password).await {
         Ok(_) => {
             state.load_telegram(&req.password).await;
-            (StatusCode::OK, Json(serde_json::json!({"status": "unlocked"})))
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({"status": "unlocked"})),
+            )
         }
         Err(wallet_core::wallet::WalletError::NotFound(_)) => (
             StatusCode::BAD_REQUEST,
@@ -97,7 +97,9 @@ async fn setup_wallet(
     let keys: WalletKeys = match req.action.as_str() {
         "generate" => match network {
             Network::Solana => solana_wallet::generate_keypair(),
-            Network::Eth | Network::Bnb | Network::Arb | Network::Polygon => evm_wallet::generate_keypair(),
+            Network::Eth | Network::Bnb | Network::Arb | Network::Polygon => {
+                evm_wallet::generate_keypair()
+            }
         },
         "import" => {
             let pk = match &req.private_key {
@@ -111,7 +113,9 @@ async fn setup_wallet(
             };
             let result = match network {
                 Network::Solana => solana_wallet::import_from_base58(pk),
-                Network::Eth | Network::Bnb | Network::Arb | Network::Polygon => evm_wallet::import_from_hex(pk),
+                Network::Eth | Network::Bnb | Network::Arb | Network::Polygon => {
+                    evm_wallet::import_from_hex(pk)
+                }
             };
             match result {
                 Ok(k) => k,
@@ -159,6 +163,28 @@ async fn save_telegram_settings(
     State(state): State<AppState>,
     Json(req): Json<TelegramSettingsRequest>,
 ) -> (StatusCode, Json<serde_json::Value>) {
+    match state.wallet.verify_password(&req.password).await {
+        Ok(()) => {}
+        Err(wallet_core::wallet::WalletError::NotFound(_)) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "no wallets found"})),
+            )
+        }
+        Err(wallet_core::wallet::WalletError::Crypto(_)) => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({"error": "invalid password"})),
+            )
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+        }
+    }
+
     let tg = TelegramConfig {
         bot_token: req.bot_token.clone(),
         chat_id: req.chat_id.clone(),
@@ -335,6 +361,30 @@ mod tests {
             .post("/api/admin/unlock")
             .json(&serde_json::json!({"password": "wrong"}))
             .await;
+        assert_eq!(resp.status_code(), 401);
+    }
+
+    #[tokio::test]
+    async fn save_telegram_settings_with_wrong_password_returns_401() {
+        let (server, _dir) = admin_server();
+        server
+            .post("/api/admin/setup/wallet")
+            .json(&serde_json::json!({
+                "password": "correct",
+                "network": "eth",
+                "action": "generate"
+            }))
+            .await;
+
+        let resp = server
+            .post("/api/admin/settings/telegram")
+            .json(&serde_json::json!({
+                "bot_token": "bot-token",
+                "chat_id": "chat-id",
+                "password": "wrong"
+            }))
+            .await;
+
         assert_eq!(resp.status_code(), 401);
     }
 }

@@ -14,7 +14,13 @@ pub enum Network {
 
 impl Network {
     pub fn all() -> &'static [Network] {
-        &[Network::Solana, Network::Eth, Network::Bnb, Network::Arb, Network::Polygon]
+        &[
+            Network::Solana,
+            Network::Eth,
+            Network::Bnb,
+            Network::Arb,
+            Network::Polygon,
+        ]
     }
 
     pub fn wallet_filename(&self) -> &'static str {

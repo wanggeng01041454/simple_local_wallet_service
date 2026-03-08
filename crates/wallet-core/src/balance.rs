@@ -46,22 +46,14 @@ const SOLANA_USDT_MINT: &str = "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB";
 const SOLANA_USDC_MINT: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
 /// Query all token balances (native + USDT + USDC) for a given network and address.
-pub async fn query_balances(
-    rpc_url: &str,
-    network: &Network,
-    address: &str,
-) -> Vec<TokenBalance> {
+pub async fn query_balances(rpc_url: &str, network: &Network, address: &str) -> Vec<TokenBalance> {
     match network {
         Network::Solana => query_solana_balances(rpc_url, address).await,
         _ => query_evm_balances(rpc_url, network, address).await,
     }
 }
 
-async fn query_evm_balances(
-    rpc_url: &str,
-    network: &Network,
-    address: &str,
-) -> Vec<TokenBalance> {
+async fn query_evm_balances(rpc_url: &str, network: &Network, address: &str) -> Vec<TokenBalance> {
     let tokens = evm_tokens(network);
     let client = reqwest::Client::new();
 
@@ -105,10 +97,14 @@ async fn evm_native_balance(
         "params": [address, "latest"],
         "id": 1
     });
-    let resp: serde_json::Value = client.post(rpc_url).json(&body).send().await?.json().await?;
-    let hex_str = resp["result"]
-        .as_str()
-        .ok_or("missing result")?;
+    let resp: serde_json::Value = client
+        .post(rpc_url)
+        .json(&body)
+        .send()
+        .await?
+        .json()
+        .await?;
+    let hex_str = resp["result"].as_str().ok_or("missing result")?;
     let wei = u128::from_str_radix(hex_str.trim_start_matches("0x"), 16)?;
     Ok(format_units(wei, 18))
 }
@@ -130,10 +126,14 @@ async fn evm_erc20_balance(
         "params": [{"to": contract, "data": data}, "latest"],
         "id": 1
     });
-    let resp: serde_json::Value = client.post(rpc_url).json(&body).send().await?.json().await?;
-    let hex_str = resp["result"]
-        .as_str()
-        .ok_or("missing result")?;
+    let resp: serde_json::Value = client
+        .post(rpc_url)
+        .json(&body)
+        .send()
+        .await?
+        .json()
+        .await?;
+    let hex_str = resp["result"].as_str().ok_or("missing result")?;
     let clean = hex_str.trim_start_matches("0x");
     if clean.is_empty() || clean.chars().all(|c| c == '0') {
         return Ok("0".to_string());
@@ -178,10 +178,14 @@ async fn solana_native_balance(
         "params": [address],
         "id": 1
     });
-    let resp: serde_json::Value = client.post(rpc_url).json(&body).send().await?.json().await?;
-    let lamports = resp["result"]["value"]
-        .as_u64()
-        .ok_or("missing value")?;
+    let resp: serde_json::Value = client
+        .post(rpc_url)
+        .json(&body)
+        .send()
+        .await?
+        .json()
+        .await?;
+    let lamports = resp["result"]["value"].as_u64().ok_or("missing value")?;
     Ok(format_units(lamports as u128, 9))
 }
 
@@ -201,20 +205,52 @@ async fn solana_spl_balance(
         ],
         "id": 1
     });
-    let resp: serde_json::Value = client.post(rpc_url).json(&body).send().await?.json().await?;
+    let resp: serde_json::Value = client
+        .post(rpc_url)
+        .json(&body)
+        .send()
+        .await?
+        .json()
+        .await?;
 
     let accounts = resp["result"]["value"]
         .as_array()
         .ok_or("missing value array")?;
 
+    parse_solana_token_balance(accounts)
+}
+
+fn parse_solana_token_balance(
+    accounts: &[serde_json::Value],
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     if accounts.is_empty() {
         return Ok("0".to_string());
     }
 
-    let ui_amount = accounts[0]["account"]["data"]["parsed"]["info"]["tokenAmount"]["uiAmountString"]
-        .as_str()
-        .unwrap_or("0");
-    Ok(ui_amount.to_string())
+    let mut total = 0u128;
+    let mut decimals = None;
+
+    for account in accounts {
+        let token_amount = &account["account"]["data"]["parsed"]["info"]["tokenAmount"];
+        let amount = token_amount["amount"].as_str().ok_or("missing amount")?;
+        let account_decimals = token_amount["decimals"]
+            .as_u64()
+            .ok_or("missing decimals")? as u8;
+
+        total = total
+            .checked_add(amount.parse::<u128>()?)
+            .ok_or("token amount overflow")?;
+
+        match decimals {
+            Some(existing) if existing != account_decimals => {
+                return Err("inconsistent token decimals".into())
+            }
+            None => decimals = Some(account_decimals),
+            _ => {}
+        }
+    }
+
+    Ok(format_units(total, decimals.unwrap_or(0)))
 }
 
 fn format_units(value: u128, decimals: u8) -> String {
@@ -265,5 +301,41 @@ mod tests {
     fn format_units_sol_lamports() {
         // 1.5 SOL = 1_500_000_000 lamports
         assert_eq!(format_units(1_500_000_000, 9), "1.5");
+    }
+
+    #[test]
+    fn parse_solana_token_balance_sums_multiple_accounts() {
+        let accounts = vec![
+            serde_json::json!({
+                "account": {
+                    "data": {
+                        "parsed": {
+                            "info": {
+                                "tokenAmount": {
+                                    "amount": "1250000",
+                                    "decimals": 6
+                                }
+                            }
+                        }
+                    }
+                }
+            }),
+            serde_json::json!({
+                "account": {
+                    "data": {
+                        "parsed": {
+                            "info": {
+                                "tokenAmount": {
+                                    "amount": "750000",
+                                    "decimals": 6
+                                }
+                            }
+                        }
+                    }
+                }
+            }),
+        ];
+
+        assert_eq!(parse_solana_token_balance(&accounts).unwrap(), "2");
     }
 }

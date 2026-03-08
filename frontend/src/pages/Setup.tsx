@@ -1,12 +1,14 @@
 import { useState } from 'react'
 import axios from 'axios'
 import { useNavigate } from 'react-router-dom'
+import { useApp } from '../context/AppContext'
 
 type Step = 'password' | 'wallets'
 const NETWORKS = ['solana', 'eth', 'bnb', 'arb', 'polygon'] as const
 
 export default function Setup() {
   const navigate = useNavigate()
+  const { refresh } = useApp()
   const [step, setStep] = useState<Step>('password')
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
@@ -57,7 +59,10 @@ export default function Setup() {
     }
   }
 
-  const handleFinish = () => navigate('/unlock')
+  const handleFinish = async () => {
+    await refresh()
+    navigate('/unlock')
+  }
 
   if (step === 'password') {
     return (
@@ -127,7 +132,7 @@ export default function Setup() {
       ))}
       <button
         className="btn-block"
-        onClick={handleFinish}
+        onClick={() => void handleFinish()}
         disabled={Object.keys(createdWallets).length === 0}
         style={{ marginTop: 8 }}
       >
