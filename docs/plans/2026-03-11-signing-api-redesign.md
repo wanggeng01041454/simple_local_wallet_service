@@ -79,6 +79,15 @@ axum 的 `Json<T>` 提取器在以下情况会在进入业务逻辑前直接返�
 transaction: String,
 ```
 
+**typed_data 字段的特殊处理：**
+
+`typed_data` 是动态结构，无法用 `ToSchema` 逐字段描述。约定如下：
+
+- Rust 类型使用 `serde_json::Value`，OpenAPI 类型声明为 `object`
+- 不逐字段生成 schema，只在 `description` 中注明："标准 EIP-712 结构，对齐 eth_signTypedData_v4，含 domain / types / primaryType / message 四个字段"
+- 通过 `#[schema(example = json!(...))]` 提供一个完整的 example 对象供文档展示
+- `EIP712Domain` 不要求客户端在 `types` 中显式传入，服务端自行构造
+
 ---
 
 ## 接口 1 — Solana 交易签名
@@ -119,9 +128,7 @@ POST /api/wallet/sign/solana
 
 ### 行为说明
 
-- 支持两种交易格式，自动识别并分别处理：
-  - **Legacy `Transaction`**：使用 `solana_sdk::transaction::Transaction` 反序列化后签名
-  - **`VersionedTransaction`**：使用 `solana_sdk::transaction::VersionedTransaction` 反序列化后签名
+- 支持两种交易格式，反序列化优先级：**先尝试 `VersionedTransaction`，失败后再尝试 Legacy `Transaction`**；两者均失败返回 400 `invalid_transaction`
 - `recent_blockhash` 由调用方在构造交易时填入，本服务不读取也不修改
 - 多签交易：本服务只填充自己持有密钥对应的 signer 位置，其余 signer 位置保留原状
 - 输出编码固定为 base58，与输入 encoding 无关
@@ -205,11 +212,14 @@ POST /api/wallet/sign/evm/transaction
 
 | 场景 | 行为 |
 |------|------|
-| 输入交易已包含有效签名（v/r/s 非零） | 返回 400，`{"error": "already_signed"}` |
+| 输入交易已包含有效签名（v/r/s 非零） | 返回 400 `already_signed` |
 | Type 0 Legacy 交易，无 chainId 字段 | 注入 network 对应的 chainId，正常签名 |
 | Type 1 / 2 交易，chainId 与 network 一致 | 正常签名 |
-| Type 1 / 2 交易，chainId 与 network **不一致** | 返回 400，`{"error": "chain_id_mismatch"}` |
-| 输入为 Type 3 交易 | 返回 400，`{"error": "unsupported_tx_type"}` |
+| Type 1 / 2 交易，chainId 与 network **不一致** | 返回 400 `chain_id_mismatch` |
+| 输入为 Type 3 交易 | 返回 400 `unsupported_tx_type` |
+| RLP 解码失败（非法 hex 或结构损坏） | 返回 400 `invalid_transaction` |
+| Type 0 缺少 nonce / gas / gasPrice 等必填字段 | 返回 400 `invalid_transaction`（不细分字段） |
+| Type 1 / 2 缺少 nonce / gas / maxFeePerGas 等必填字段 | 返回 400 `invalid_transaction`（不细分字段） |
 | 返回的已签名交易 | 保证除 v/r/s 三个签名字段外，其余字段（nonce/gas/to/value/data/chainId 等）与输入完全一致 |
 
 ### chainId 映射
@@ -375,6 +385,49 @@ pub enum SignEvent {
 对应的 `format_sign_message` 按枚举分支生成不同格式的通知文本。
 `format_locked_message` 保持不变。
 
+### Telegram 消息安全处理规则
+
+当前实现固定使用 `parse_mode = "Markdown"`，而新通知内容中含有用户数据（交易串、typed_data JSON），这些数据可能触发 Markdown 解析错误或超出消息长度上限（Telegram 单条消息最长 **4096 字符**）。
+
+**Markdown 特殊字符转义：**
+- 发送前对所有用户数据字段（`transaction`、`typed_data_json`、地址、value 等）中的 Markdown 特殊字符进行转义
+- 需转义的字符：`` _ * [ ] ( ) ~ ` > # + - = | { } . ! ``
+- 固定文本模板部分（如 `[Solana 签名]`、字段标签）不转义
+
+**消息长度超限处理（按接口类型）：**
+
+| 接口 | 超限截断策略 |
+|------|------------|
+| Solana | `transaction` 字段截断为前 60 字符 + `...`；TxID 不截断 |
+| EVM 交易 | from/to/value 均为定长，正常情况不超限；若超限整体截断到 4096 字符 |
+| EIP-712 | `typed_data_json` 截断为前 500 字符 + `...（已截断）` |
+
+**发送失败降级策略：**
+- Telegram 发送失败（网络错误或消息格式拒绝）：记录 error 日志，**不影响签名接口的响应返回**
+- 降级不重试，不补发，与当前行为一致
+
+---
+
+## 代码层次划分
+
+当前 `sign_evm_message` 写在 `wallet-server/src/api/mod.rs` 中，`wallet-core` 仅提供最基础的 key 导入/导出 primitive。新功能复杂度已超出 handler 层，需明确各层职责：
+
+### wallet-core 职责（下沉到此层）
+
+| 模块 | 新增内容 |
+|------|---------|
+| `evm_wallet.rs` | EVM 交易 RLP 解码、chainId 注入/校验、签名、重编码；EIP-712 digest 计算（含 `alloy-dyn-abi` 调用） |
+| `solana_wallet.rs` | `sign_transaction` 函数（Legacy + Versioned 反序列化、signer slot 定位、签名、重序列化） |
+| `notification.rs` | `SignEvent` 枚举定义、`format_sign_message`、Markdown 转义工具函数、消息截断逻辑 |
+
+### wallet-server 职责（handler 层只做）
+
+- 解析和校验 HTTP 请求字段（`request_id`、`network`、`encoding` 等枚举合法性）
+- 调用 `wallet-core` 的签名函数
+- 将错误映射为 HTTP 状态码 + JSON 响应
+- 调用 `notification` 发送 Telegram 通知
+- 不包含任何协议解析逻辑（RLP / EIP-712 / Solana 交易格式）
+
 ---
 
 ## 依赖库变更
@@ -393,24 +446,75 @@ pub enum SignEvent {
 
 以下内容需与接口改造同步完成，缺一不可：
 
-| 分类 | 具体内容 |
-|------|---------|
-| **路由** | `wallet-server/src/api/mod.rs` 中删除旧路由 `POST /api/wallet/sign`，注册三条新路由 |
-| **OpenAPI** | `ApiDoc` 的 `paths` 和 `components(schemas)` 中删除旧 schema（`SignRequest` / `SignMetadata` / `SignResponse`），注册新的三组 schema |
-| **通知层** | `wallet-core/src/notification.rs`：`SignEvent` 改为枚举，更新 `format_sign_message`，保留 `format_locked_message` |
-| **wallet-core** | `solana_wallet.rs`：增加 `sign_transaction` 函数（Legacy + Versioned），保留或废弃旧 `sign_message` |
-| **集成测试** | 删除 `api/mod.rs` 中所有针对旧 `/api/wallet/sign` 的测试；为三个新接口补充测试矩阵（见下表） |
-| **README** | 更新接口列表和使用示例，删除旧接口相关描述 |
-| **docs/simple_requirement.md** | 同步更新需求文档中的接口说明 |
+| 分类 | 文件 | 具体内容 |
+|------|------|---------|
+| **路由** | `wallet-server/src/api/mod.rs` | 删除 `POST /api/wallet/sign` 路由注册，新增三条路由 |
+| **OpenAPI** | `wallet-server/src/api/mod.rs` | `ApiDoc` 的 `paths` 中删除 `sign_transaction`；`components(schemas)` 中删除 `SignRequest` / `SignMetadata` / `SignResponse`；注册新的三组 schema；`typed_data` 用 `serde_json::Value` + example |
+| **旧 handler 及 helper** | `wallet-server/src/api/mod.rs` | 删除 `sign_transaction` handler 函数和 `sign_evm_message` helper 函数 |
+| **wallet-core EVM** | `wallet-core/src/evm_wallet.rs` | 新增 `sign_transaction`（RLP 解析+chainId处理+签名+重编码）和 `sign_typed_data`（EIP-712 digest+签名） |
+| **wallet-core Solana** | `wallet-core/src/solana_wallet.rs` | 新增 `sign_transaction`（Legacy+Versioned 反序列化+signer slot+签名+重序列化），废弃或保留旧 `sign_message` |
+| **通知层** | `wallet-core/src/notification.rs` | `SignEvent` 改为枚举；更新 `format_sign_message`；新增 Markdown 转义工具函数和截断逻辑；保留 `format_locked_message` |
+| **集成测试** | `wallet-server/src/api/mod.rs` | 删除所有旧 `/api/wallet/sign` 测试；按上方测试矩阵补充新测试 |
+| **README** | `README.md` | 更新接口列表和示例，删除旧接口描述，注明 breaking change |
+| **需求文档** | `docs/simple_requirement.md` | 同步更新接口说明 |
 
-### 新接口测试矩阵
+**Breaking change 说明（需在 README 中注明）：**
+- `POST /api/wallet/sign` 已移除，无向后兼容，调用方必须迁移到三个新接口
+- 错误响应格式统一变更：新增 `request_id` 字段，调用方需更新错误处理逻辑
 
-| 接口 | 测试用例 |
-|------|---------|
-| Solana | 锁定返回 503；缺少 request_id 返回 400；无效 encoding 返回 400；Legacy 交易签名成功；VersionedTransaction 签名成功；signer_not_required 返回 400；already_signed 返回 400 |
-| EVM Tx | 锁定返回 503；缺少 request_id 返回 400；无效 network 返回 400；Type 0/1/2 签名成功；已签名交易返回 400 already_signed；Type 3 返回 400 unsupported_tx_type；Type 0 无 chainId 时自动注入并成功；Type 1/2 chainId 不一致返回 400 chain_id_mismatch |
-| EIP-712 | 锁定返回 503；缺少 request_id 返回 400；无效 network 返回 400；合法 typed_data 签名成功返回 r/s/v/signature；message 多余字段返回 400 invalid_typed_data；types 与 message 不匹配返回 400 invalid_typed_data；domain.chainId 缺失时自动注入并成功；domain.chainId 不一致返回 400 chain_id_mismatch |
-| 通用 | malformed JSON 返回 400 无 request_id；空 body 返回 400 无 request_id；Content-Type 错误返回 415 无 request_id |
+### 新接口测试矩阵与断言目标
+
+**通用（所有接口）：**
+
+| 测试用例 | 断言目标 |
+|---------|---------|
+| malformed JSON | 返回 400，body 为 `{"error":"malformed_json",...}`，**无 request_id 字段** |
+| 空 body | 返回 400，`{"error":"empty_body"}`，无 request_id |
+| Content-Type 非 json | 返回 415，`{"error":"unsupported_media_type"}`，无 request_id |
+| 缺少 request_id（JSON 合法） | 返回 400，`{"error":"missing_request_id"}`，无 request_id |
+| 钱包锁定 | 返回 503，响应含 request_id |
+| 所有业务错误 | 响应 body 中均含 `request_id`，值等于请求中的 request_id |
+| 旧接口 `POST /api/wallet/sign` | 返回 404（路由已移除） |
+| OpenAPI `/api/docs/openapi.json` | 不含 `/api/wallet/sign` 路径；含三条新路径；`typed_data` schema 类型为 `object` |
+
+**Solana 接口：**
+
+| 测试用例 | 断言目标 |
+|---------|---------|
+| Legacy 交易签名成功 | 返回 200；响应 `transaction` 可 base58 解码为合法 Legacy Transaction；签名后用本服务 pubkey 可验证该签名有效 |
+| VersionedTransaction 签名成功 | 返回 200；`transaction` 可反序列化为 VersionedTransaction；对应 signer slot 非空且可验证 |
+| base64 输入 | 返回 200；encoding=base64 可正常解码并签名 |
+| 本服务 pubkey 不在 required signers | 返回 400 `signer_not_required`，含 request_id |
+| 交易所有 slot 已满 | 返回 400 `already_signed`，含 request_id |
+| 两种格式均反序列化失败 | 返回 400 `invalid_transaction`，含 request_id |
+
+**EVM 交易接口：**
+
+| 测试用例 | 断言目标 |
+|---------|---------|
+| Type 2 签名成功 | 返回 200；响应 `transaction` RLP 解码后 `from` 字段可用 `ecrecover` 还原为本服务地址 |
+| Type 0 签名成功 | 同上；chainId 自动注入为 network 对应值 |
+| Type 1 签名成功 | 同上 |
+| Type 0 无 chainId | 返回 200；签名后交易含正确 chainId |
+| chainId 不一致 | 返回 400 `chain_id_mismatch`，含 request_id |
+| 已签名交易 | 返回 400 `already_signed`，含 request_id |
+| Type 3 输入 | 返回 400 `unsupported_tx_type`，含 request_id |
+| 非法 RLP hex | 返回 400 `invalid_transaction`，含 request_id |
+| 签名字段以外内容不变 | 解码输入和输出交易，断言 nonce/to/value/data/gasLimit 等字段完全相同 |
+
+**EIP-712 接口：**
+
+| 测试用例 | 断言目标 |
+|---------|---------|
+| 合法 typed_data 签名成功 | 返回 200；`signature` 长度 132（含 0x）；`r`/`s` 各 66 字符；`v` 为 `"0x1b"` 或 `"0x1c"` |
+| digest 正确性 | 用相同 typed_data 和私钥通过参考实现（如 `eth_signTypedData_v4`）计算 digest，断言签名结果一致 |
+| domain.chainId 缺失 | 返回 200；签名使用注入后的 chainId，digest 可在链上验证 |
+| domain.chainId 不一致 | 返回 400 `chain_id_mismatch`，含 request_id |
+| message 含未声明字段 | 返回 400 `invalid_typed_data`，含 request_id |
+| types 与 message 不匹配 | 返回 400 `invalid_typed_data`，含 request_id |
+| types 含 EIP712Domain | 返回 200（服务端忽略该字段，签名正常） |
+| 嵌套 struct 类型 | 返回 200；签名结果与参考实现一致 |
+| 数组类型 | 返回 200；签名结果与参考实现一致 |
 
 ---
 
