@@ -782,10 +782,11 @@ mod tests {
         use axum_test::TestServer;
         use solana_sdk::{
             hash::Hash,
-            message::Message,
+            message::{Message, VersionedMessage},
             pubkey::Pubkey,
             signature::Keypair as SolanaKeypair,
             signer::Signer,
+            transaction::VersionedTransaction,
         };
 
         fn make_unsigned_solana_tx_base64(kp: &SolanaKeypair) -> String {
@@ -798,6 +799,28 @@ mod tests {
             let mut tx = solana_sdk::transaction::Transaction::new_unsigned(msg);
             tx.message.recent_blockhash = Hash::new_unique();
             let bytes = bincode::serialize(&tx).unwrap();
+            base64::engine::general_purpose::STANDARD.encode(&bytes)
+        }
+
+        fn make_unsigned_versioned_tx_base64(kp: &SolanaKeypair) -> String {
+            let ix = solana_sdk::system_instruction::transfer(
+                &kp.pubkey(),
+                &Pubkey::new_unique(),
+                1_000_000,
+            );
+            let blockhash = Hash::new_unique();
+            let msg_v0 = solana_sdk::message::v0::Message::try_compile(
+                &kp.pubkey(),
+                &[ix],
+                &[],
+                blockhash,
+            )
+            .unwrap();
+            let vtx = VersionedTransaction {
+                signatures: vec![solana_sdk::signature::Signature::default()],
+                message: VersionedMessage::V0(msg_v0),
+            };
+            let bytes = bincode::serialize(&vtx).unwrap();
             base64::engine::general_purpose::STANDARD.encode(&bytes)
         }
 
@@ -910,6 +933,35 @@ mod tests {
             let signed_tx: solana_sdk::transaction::Transaction =
                 bincode::deserialize(&decoded).unwrap();
             assert!(signed_tx.verify().is_ok());
+        }
+
+        #[tokio::test]
+        async fn sign_solana_versioned_success_returns_base58_transaction() {
+            let (server, _dir, kp) = unlocked_server_with_solana().await;
+            let tx_b64 = make_unsigned_versioned_tx_base64(&kp);
+            let resp = server
+                .post("/api/wallet/sign/solana")
+                .json(&serde_json::json!({
+                    "request_id": "req-1",
+                    "encoding": "base64",
+                    "transaction": tx_b64
+                }))
+                .await;
+            assert_eq!(resp.status_code(), 200);
+            let body: serde_json::Value = resp.json();
+            assert_eq!(body["request_id"], "req-1");
+
+            // Response must be a valid base58 string decodable as VersionedTransaction
+            let tx_str = body["transaction"].as_str().unwrap();
+            let decoded = bs58::decode(tx_str).into_vec().unwrap();
+            let signed_vtx: VersionedTransaction = bincode::deserialize(&decoded).unwrap();
+
+            // Signer slot (index 0 = fee payer) must be filled
+            let default_sig = solana_sdk::signature::Signature::default();
+            assert_ne!(
+                signed_vtx.signatures[0], default_sig,
+                "fee payer signature slot should be filled after signing"
+            );
         }
 
         #[tokio::test]

@@ -62,6 +62,13 @@ pub fn sign_transaction(
                     num_required
                 )));
             }
+            if tx.message.account_keys.len() < num_required {
+                return Err(WalletError::InvalidTransaction(format!(
+                    "transaction has {} account key(s) but header declares {} required signers",
+                    tx.message.account_keys.len(),
+                    num_required
+                )));
+            }
             let required_signers = &tx.message.account_keys[..num_required];
             let signer_index = required_signers
                 .iter()
@@ -105,6 +112,13 @@ pub fn sign_transaction(
                 )));
             }
             let static_keys = vtx.message.static_account_keys();
+            if static_keys.len() < num_required {
+                return Err(WalletError::InvalidTransaction(format!(
+                    "transaction has {} static account key(s) but header declares {} required signers",
+                    static_keys.len(),
+                    num_required
+                )));
+            }
 
             let required_signers = &static_keys[..num_required];
             let signer_index = required_signers
@@ -274,7 +288,6 @@ mod tests {
     #[test]
     fn sign_transaction_insufficient_signature_slots_returns_invalid_transaction() {
         // Craft a transaction whose signatures vec is shorter than num_required_signatures.
-        // This can arise from a truncated / malformed serialized transaction.
         let kp = SolanaKeypair::new();
         let mut tx = Transaction::default();
         // Claim 2 required signers but provide only 1 (empty) signature slot
@@ -286,6 +299,26 @@ mod tests {
         assert!(
             matches!(result, Err(WalletError::InvalidTransaction(_))),
             "expected InvalidTransaction for insufficient signature slots"
+        );
+    }
+
+    #[test]
+    fn sign_transaction_insufficient_account_keys_returns_invalid_transaction() {
+        // Craft a transaction where account_keys.len() < num_required_signatures.
+        let kp = SolanaKeypair::new();
+        let mut tx = Transaction::default();
+        // Claim 2 required signers but only 1 account key
+        tx.message.header.num_required_signatures = 2;
+        tx.message.account_keys = vec![kp.pubkey()]; // only 1 key < 2 required
+        tx.signatures = vec![
+            solana_sdk::signature::Signature::default(),
+            solana_sdk::signature::Signature::default(),
+        ]; // 2 slots (passes the first check)
+        let bytes = bincode::serialize(&tx).unwrap();
+        let result = sign_transaction(&kp.to_bytes(), &bytes);
+        assert!(
+            matches!(result, Err(WalletError::InvalidTransaction(_))),
+            "expected InvalidTransaction for insufficient account keys"
         );
     }
 
