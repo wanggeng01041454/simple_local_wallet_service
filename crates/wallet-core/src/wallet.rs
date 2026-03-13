@@ -18,6 +18,18 @@ pub enum WalletError {
     Io(#[from] std::io::Error),
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("transaction already signed")]
+    AlreadySigned,
+    #[error("signer not required: local pubkey is not in the transaction's required signers")]
+    SignerNotRequired,
+    #[error("chain id mismatch: expected {expected}, got {actual}")]
+    ChainIdMismatch { expected: u64, actual: u64 },
+    #[error("unsupported transaction type: {0}")]
+    UnsupportedTxType(u8),
+    #[error("invalid transaction: {0}")]
+    InvalidTransaction(String),
+    #[error("invalid typed data: {0}")]
+    InvalidTypedData(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -185,5 +197,37 @@ mod tests {
         let (manager, _dir) = temp_wallet_manager();
         let result = manager.get_address(&Network::Eth).await;
         assert!(matches!(result, Err(WalletError::Locked)));
+    }
+
+    #[test]
+    fn wallet_error_already_signed_formats_correctly() {
+        let e = WalletError::AlreadySigned;
+        assert_eq!(e.to_string(), "transaction already signed");
+    }
+
+    #[test]
+    fn wallet_error_chain_id_mismatch_includes_both_values() {
+        let e = WalletError::ChainIdMismatch { expected: 1, actual: 56 };
+        let msg = e.to_string();
+        assert!(msg.contains("1"));
+        assert!(msg.contains("56"));
+    }
+
+    #[test]
+    fn wallet_error_unsupported_tx_type_includes_type_byte() {
+        let e = WalletError::UnsupportedTxType(3);
+        assert!(e.to_string().contains("3"));
+    }
+
+    #[test]
+    fn wallet_error_invalid_transaction_includes_message() {
+        let e = WalletError::InvalidTransaction("bad rlp".to_string());
+        assert!(e.to_string().contains("bad rlp"));
+    }
+
+    #[test]
+    fn wallet_error_invalid_typed_data_includes_message() {
+        let e = WalletError::InvalidTypedData("missing field".to_string());
+        assert!(e.to_string().contains("missing field"));
     }
 }

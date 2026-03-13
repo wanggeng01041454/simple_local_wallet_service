@@ -17,6 +17,9 @@ http = "1"
 mime_guess = "2"
 anyhow = { workspace = true }
 hex = "0.4"
+base64 = "0.22"
+bs58 = "0.5"
+bincode = "1"
 chrono = { version = "0.4", features = ["serde"] }
 alloy = { version = "1", features = ["signers", "signer-local"] }
 utoipa = { workspace = true }
@@ -25,3 +28,4 @@ utoipa = { workspace = true }
 axum-test = "15"
 tokio = { workspace = true }
 tempfile = "3"
+solana-sdk = "2"

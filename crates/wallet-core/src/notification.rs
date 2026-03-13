@@ -1,13 +1,96 @@
 use tracing::{error, info};
 
-#[derive(Debug, Clone)]
-pub struct SignEvent {
-    pub network: String,
-    pub to: Option<String>,
-    pub value: Option<String>,
-    pub description: Option<String>,
-    pub signed_at: String,
+// ---- 工具函数 ----
+
+/// 转义 Telegram Markdown v1 特殊字符：* _ ` [ ]
+pub fn escape_markdown(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '*' | '_' | '`' | '[' | ']' => {
+                out.push('\\');
+                out.push(c);
+            }
+            _ => out.push(c),
+        }
+    }
+    out
 }
+
+/// 截断字符串到 max_chars 个 Unicode 字符，超出时追加 "..."
+pub fn truncate_str(s: &str, max_chars: usize) -> String {
+    let count = s.chars().count();
+    if count <= max_chars {
+        s.to_string()
+    } else {
+        let truncated: String = s.chars().take(max_chars).collect();
+        format!("{}...", truncated)
+    }
+}
+
+// ---- SignEvent 枚举 ----
+
+#[derive(Debug, Clone)]
+pub enum SignEvent {
+    Solana {
+        /// signatures[0] 的 base58 值；本服务不是 fee payer 时为 None
+        tx_id: Option<String>,
+        /// base58 编码的签名完整交易
+        transaction: String,
+        signed_at: String,
+    },
+    EvmTransaction {
+        network: String,
+        from: String,
+        /// 合约创建时为 None
+        to: Option<String>,
+        /// 单位 wei，十进制字符串
+        value: String,
+        signed_at: String,
+    },
+    EvmTypedData {
+        network: String,
+        /// typed_data 原始 JSON 字符串
+        typed_data_json: String,
+        signed_at: String,
+    },
+}
+
+pub fn format_sign_message(event: &SignEvent) -> String {
+    match event {
+        SignEvent::Solana { tx_id, transaction, signed_at } => {
+            let txid_str = tx_id.as_deref().unwrap_or("N/A");
+            let tx_display = truncate_str(transaction, 60);
+            let tx_escaped = escape_markdown(&tx_display);
+            format!(
+                "*[Solana 签名]*\nTxID: `{}`\n交易: `{}`\n时间: {}",
+                txid_str, tx_escaped, signed_at
+            )
+        }
+        SignEvent::EvmTransaction { network, from, to, value, signed_at } => {
+            let to_str = to.as_deref().unwrap_or("N/A (contract creation)");
+            format!(
+                "*[EVM 签名]*\n网络: {}\nFrom: `{}`\nTo: `{}`\nValue: {} wei\n时间: {}",
+                network, from, to_str, value, signed_at
+            )
+        }
+        SignEvent::EvmTypedData { network, typed_data_json, signed_at } => {
+            let truncated = if typed_data_json.chars().count() > 500 {
+                let s: String = typed_data_json.chars().take(500).collect();
+                format!("{}...（已截断）", s)
+            } else {
+                typed_data_json.clone()
+            };
+            let escaped = escape_markdown(&truncated);
+            format!(
+                "*[EIP-712 签名]*\n网络: {}\n数据: `{}`\n时间: {}",
+                network, escaped, signed_at
+            )
+        }
+    }
+}
+
+// ---- TelegramClient ----
 
 #[derive(Debug, Clone)]
 pub struct TelegramClient {
@@ -25,7 +108,6 @@ impl TelegramClient {
         }
     }
 
-    /// Send a message to Telegram. Failures are logged and ignored.
     pub async fn send(&self, text: &str) {
         let url = format!("https://api.telegram.org/bot{}/sendMessage", self.bot_token);
         let body = serde_json::json!({
@@ -48,24 +130,6 @@ impl TelegramClient {
     }
 }
 
-pub fn format_sign_message(event: &SignEvent) -> String {
-    let mut lines = vec![
-        "🔏 *Transaction Signed*".to_string(),
-        format!("Network: {}", event.network),
-    ];
-    if let Some(to) = &event.to {
-        lines.push(format!("To: `{to}`"));
-    }
-    if let Some(value) = &event.value {
-        lines.push(format!("Value: {value}"));
-    }
-    if let Some(desc) = &event.description {
-        lines.push(format!("Description: {desc}"));
-    }
-    lines.push(format!("Time: {}", event.signed_at));
-    lines.join("\n")
-}
-
 pub fn format_locked_message(operation: &str) -> String {
     format!(
         "⚠️ *Wallet Locked*\nAn external app attempted a `{operation}` request, but the wallet is locked.\nPlease unlock at http://localhost:9292"
@@ -76,25 +140,128 @@ pub fn format_locked_message(operation: &str) -> String {
 mod tests {
     use super::*;
 
-    #[test]
-    fn format_sign_notification_contains_network_and_time() {
-        let event = SignEvent {
-            network: "Ethereum".to_string(),
-            to: Some("0xAbc".to_string()),
-            value: Some("0.1 ETH".to_string()),
-            description: Some("transfer".to_string()),
-            signed_at: "2026-03-04 10:30:00 UTC".to_string(),
-        };
+    // --- escape_markdown ---
 
-        let msg = format_sign_message(&event);
-        assert!(msg.contains("Ethereum"));
-        assert!(msg.contains("0xAbc"));
-        assert!(msg.contains("0.1 ETH"));
-        assert!(msg.contains("2026-03-04"));
+    #[test]
+    fn escape_markdown_escapes_asterisk() {
+        assert_eq!(escape_markdown("hello*world"), "hello\\*world");
     }
 
     #[test]
-    fn format_locked_notification_contains_operation_type() {
+    fn escape_markdown_escapes_underscore() {
+        assert_eq!(escape_markdown("a_b"), "a\\_b");
+    }
+
+    #[test]
+    fn escape_markdown_escapes_backtick() {
+        assert_eq!(escape_markdown("a`b"), "a\\`b");
+    }
+
+    #[test]
+    fn escape_markdown_leaves_normal_text_unchanged() {
+        assert_eq!(escape_markdown("hello world 123"), "hello world 123");
+    }
+
+    // --- truncate_str ---
+
+    #[test]
+    fn truncate_str_short_string_unchanged() {
+        assert_eq!(truncate_str("abc", 10), "abc");
+    }
+
+    #[test]
+    fn truncate_str_exact_length_unchanged() {
+        assert_eq!(truncate_str("abcde", 5), "abcde");
+    }
+
+    #[test]
+    fn truncate_str_long_string_truncated_with_ellipsis() {
+        let result = truncate_str("abcdefghij", 5);
+        assert_eq!(result, "abcde...");
+    }
+
+    // --- format_sign_message ---
+
+    #[test]
+    fn format_solana_sign_with_tx_id_contains_txid() {
+        let event = SignEvent::Solana {
+            tx_id: Some("5abc123".to_string()),
+            transaction: "base58tx".to_string(),
+            signed_at: "2026-01-01 00:00:00 UTC".to_string(),
+        };
+        let msg = format_sign_message(&event);
+        assert!(msg.contains("5abc123"));
+        assert!(msg.contains("base58tx"));
+    }
+
+    #[test]
+    fn format_solana_sign_without_tx_id_shows_na() {
+        let event = SignEvent::Solana {
+            tx_id: None,
+            transaction: "base58tx".to_string(),
+            signed_at: "2026-01-01 00:00:00 UTC".to_string(),
+        };
+        let msg = format_sign_message(&event);
+        assert!(msg.contains("N/A"));
+    }
+
+    #[test]
+    fn format_evm_transaction_contains_from_to_value() {
+        let event = SignEvent::EvmTransaction {
+            network: "Ethereum".to_string(),
+            from: "0xAbc".to_string(),
+            to: Some("0xDef".to_string()),
+            value: "1000000000000000000".to_string(),
+            signed_at: "2026-01-01 00:00:00 UTC".to_string(),
+        };
+        let msg = format_sign_message(&event);
+        assert!(msg.contains("0xAbc"));
+        assert!(msg.contains("0xDef"));
+        assert!(msg.contains("1000000000000000000"));
+    }
+
+    #[test]
+    fn format_evm_transaction_contract_create_shows_contract_creation() {
+        let event = SignEvent::EvmTransaction {
+            network: "Ethereum".to_string(),
+            from: "0xAbc".to_string(),
+            to: None,
+            value: "0".to_string(),
+            signed_at: "2026-01-01 00:00:00 UTC".to_string(),
+        };
+        let msg = format_sign_message(&event);
+        assert!(msg.contains("contract creation") || msg.contains("N/A"));
+    }
+
+    #[test]
+    fn format_eip712_contains_network_and_truncated_data() {
+        let long_json = "x".repeat(600);
+        let event = SignEvent::EvmTypedData {
+            network: "Ethereum".to_string(),
+            typed_data_json: long_json,
+            signed_at: "2026-01-01 00:00:00 UTC".to_string(),
+        };
+        let msg = format_sign_message(&event);
+        assert!(msg.contains("Ethereum"));
+        assert!(msg.contains("...（已截断）"));
+        assert!(msg.len() <= 4096);
+    }
+
+    #[test]
+    fn format_solana_sign_truncates_long_transaction() {
+        let long_tx = "A".repeat(200);
+        let event = SignEvent::Solana {
+            tx_id: Some("txid123".to_string()),
+            transaction: long_tx,
+            signed_at: "2026-01-01 00:00:00 UTC".to_string(),
+        };
+        let msg = format_sign_message(&event);
+        assert!(msg.len() <= 4096);
+        assert!(msg.contains("..."));
+    }
+
+    #[test]
+    fn format_locked_message_contains_operation() {
         let msg = format_locked_message("sign");
         assert!(msg.contains("sign"));
         assert!(msg.to_lowercase().contains("lock"));

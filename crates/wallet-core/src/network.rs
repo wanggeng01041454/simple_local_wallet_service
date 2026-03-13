@@ -33,6 +33,16 @@ impl Network {
         }
     }
 
+    pub fn chain_id(&self) -> Option<u64> {
+        match self {
+            Network::Eth => Some(1),
+            Network::Bnb => Some(56),
+            Network::Arb => Some(42161),
+            Network::Polygon => Some(137),
+            Network::Solana => None,
+        }
+    }
+
     pub fn display_name(&self) -> &'static str {
         match self {
             Network::Solana => "Solana",

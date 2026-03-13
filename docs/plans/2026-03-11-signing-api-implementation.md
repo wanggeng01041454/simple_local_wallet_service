@@ -48,34 +48,60 @@ Task 6  → 自定义 JSON Extractor（wallet-server）
 Task 7  → Solana API handler
 Task 8  → EVM transaction API handler
 Task 9  → EIP-712 API handler
-Task 10 → 删除旧接口 + 更新 OpenAPI
-Task 11 → 文档更新
+Task 10 → 删除旧接口 + 更新 OpenAPI ✅
+Task 11 → 文档更新 ✅
 ```
 
 ---
 
 ## Task 0：Cargo 依赖配置
 
-**文件：** `crates/wallet-core/Cargo.toml`
+**必须完成所有步骤后再运行 `cargo check`，否则后续任务会因编译错误无法验证。**
 
-`wallet-core` 已有 `alloy = { version = "1", features = ["full"] }`，`full` feature 包含 `alloy-dyn-abi`。无需额外添加依赖。
+### 0.1 `crates/wallet-core/Cargo.toml`
 
-确认以下依赖均已存在（不需要添加，只需确认）：
-- `alloy = { version = "1", features = ["full"] }` — EVM 交易 RLP 解析、EIP-712
+**新增以下依赖**（在 `[dependencies]` 节中追加）：
+
+```toml
+bincode = "1"
+```
+
+确认以下依赖已存在（只读确认，不要修改）：
+- `alloy = { version = "1", features = ["full"] }` — EVM RLP、EIP-712（`full` 包含 `alloy-dyn-abi`）
 - `solana-sdk = "2"` — Solana 交易签名
-- `bs58 = "0.5"` — Solana base58 编解码
-- `base64 = "0.22"` — Solana base64 解码
-- `serde_json = { workspace = true }` — EIP-712 JSON 操作
+- `bs58 = "0.5"` — base58 编解码
+- `base64 = "0.22"` — base64 解码
+- `serde_json = { workspace = true }` — JSON 操作
 
-**文件：** `crates/wallet-server/Cargo.toml`
+### 0.2 `crates/wallet-server/Cargo.toml`
 
-`wallet-server` 的 alloy 依赖只有 `features = ["signers", "signer-local"]`，需要**移除旧的 alloy 签名逻辑**（Task 10 中删除 `sign_evm_message` helper 后即可）。无需新增依赖。
+**新增以下依赖**（在 `[dependencies]` 节中追加）：
 
-**验证命令：**
+```toml
+base64 = "0.22"
+bs58 = "0.5"
+bincode = "1"
 ```
-cd crates/wallet-core && cargo check
-cd crates/wallet-server && cargo check
+
+确认以下依赖已存在（只读确认）：
+- `alloy = { version = "1", features = ["signers", "signer-local"] }` — handler 层 hex 工具
+
+### 0.3 `crates/wallet-core/src/lib.rs`
+
+**新增以下 re-export**，以便 `wallet-server` 的集成测试可以访问 `WalletKeys`：
+
+```rust
+pub use wallet::WalletKeys;
 ```
+
+### 0.4 验证
+
+```bash
+cargo check -p wallet-core
+cargo check -p wallet-server
+```
+
+两条命令均无编译错误后，再继续执行 Task 1。
 
 ---
 
@@ -588,39 +614,44 @@ mod tests {
     }
 
     #[test]
-    fn sign_transaction_fee_payer_not_signer_tx_id_is_none() {
-        // 构造一个双签交易，本服务签第二个 signer（不是 fee payer）
-        let fee_payer = SolanaKeypair::new();
-        let co_signer = SolanaKeypair::new();
-        let to_pk = Pubkey::new_unique();
+    fn sign_transaction_non_fee_payer_signer_tx_id_is_none() {
+        // 构造一个双签交易（create_account 需要 payer 和 new_account 两个 signer）
+        // payer 是 fee payer（index 0），new_account 是 co-signer（index 1）
+        // 用 new_account 的密钥对交易签名后，signatures[0] 仍为零，tx_id 应为 None
+        let payer = SolanaKeypair::new();
+        let new_account = SolanaKeypair::new();
 
-        // 创建需要两个签名者的交易
-        let ix = system_instruction::transfer(&fee_payer.pubkey(), &to_pk, 1_000_000);
-        // 手动构造需要 co_signer 的 message（简化：直接用 nonce 场景是最好的例子，
-        // 这里用两个账户都需要签名的 transfer 并手动设置 header）
+        let ix = system_instruction::create_account(
+            &payer.pubkey(),
+            &new_account.pubkey(),
+            1_000_000,
+            0,
+            &solana_sdk::system_program::id(),
+        );
         let msg = Message::new_with_blockhash(
             &[ix],
-            Some(&fee_payer.pubkey()),
+            Some(&payer.pubkey()),
             &Hash::new_unique(),
         );
-        let mut tx = Transaction::new_unsigned(msg);
-        // 设置 co_signer 的签名槽（手动把 co_signer pubkey 加入 required signers）
-        // 注：这是简化测试，实际多签需要正确的 message 构造
-        // 先给 fee_payer 签名，确保 signatures[0] 非空
-        tx.sign(&[&fee_payer], tx.message.recent_blockhash);
-        // 验证 fee_payer 签完后 tx_id = signatures[0]
+        let tx = Transaction::new_unsigned(msg);
+
+        // 用 new_account（index 1，不是 fee payer）的密钥签名
         let tx_bytes = bincode::serialize(&tx).unwrap();
-        // 此时已完全签名（只有1个required signer），应返回 AlreadySigned
-        let result = sign_transaction(&fee_payer.to_bytes(), &tx_bytes);
-        assert!(matches!(result, Err(WalletError::AlreadySigned)));
+        let (signed_bytes, tx_id) = sign_transaction(&new_account.to_bytes(), &tx_bytes).unwrap();
+
+        // new_account 不是 fee payer，signatures[0] 仍为零，tx_id 应为 None
+        assert!(tx_id.is_none());
+
+        // 确认 signatures[1] 已填充
+        let signed_tx: Transaction = bincode::deserialize(&signed_bytes).unwrap();
+        let default_sig = solana_sdk::signature::Signature::default();
+        assert_eq!(signed_tx.signatures[0], default_sig, "fee payer slot should still be empty");
+        assert_ne!(signed_tx.signatures[1], default_sig, "co-signer slot should be filled");
     }
 }
 ```
 
-**注：** `bincode` 需要加入依赖，在 `wallet-core/Cargo.toml` 新增：
-```toml
-bincode = "1"
-```
+**注：** `bincode = "1"` 已在 Task 0 中添加到 `wallet-core/Cargo.toml`，确认后再继续。
 
 ### 3.3 实现算法（精确步骤）
 
@@ -660,21 +691,16 @@ pub fn sign_transaction(
         TxVariant::Legacy(mut tx) => {
             // 步骤 3: 确定 required signers 数量
             let num_required = tx.message.header.num_required_signatures as usize;
+            // solana_sdk 保证 signatures.len() == num_required_signatures，无需额外校验
 
-            // 步骤 4: 检查签名数组长度是否合法
-            if tx.signatures.len() != tx.message.account_keys.len() {
-                // 修正：legacy tx 的 signatures 长度应等于 num_required
-                // 实际上 solana_sdk 保证 signatures.len() == num_required_signatures
-            }
-
-            // 步骤 5: 找到本服务的 pubkey 在 required signers 中的位置
+            // 步骤 4: 找到本服务的 pubkey 在 required signers 中的位置
             let required_signers = &tx.message.account_keys[..num_required];
             let signer_index = required_signers
                 .iter()
                 .position(|pk| *pk == our_pubkey)
                 .ok_or(WalletError::SignerNotRequired)?;
 
-            // 步骤 6: 检查是否所有 signer 位置均已填充（already_signed）
+            // 步骤 5: 检查是否所有 signer 位置均已填充（already_signed）
             let default_sig = SolanaSignature::default();
             let all_signed = tx.signatures[..num_required]
                 .iter()
@@ -683,23 +709,23 @@ pub fn sign_transaction(
                 return Err(WalletError::AlreadySigned);
             }
 
-            // 步骤 7: 获取消息字节并签名
+            // 步骤 6: 获取消息字节并签名
             let message_bytes = tx.message_data();
             let sig = keypair
                 .try_sign_message(&message_bytes)
                 .map_err(|e| WalletError::InvalidTransaction(format!("sign failed: {e}")))?;
 
-            // 步骤 8: 将签名填入对应位置
+            // 步骤 7: 将签名填入对应位置
             tx.signatures[signer_index] = sig;
 
-            // 步骤 9: 计算 TxID（signatures[0] 的 base58，若仍为零则 None）
+            // 步骤 8: 计算 TxID（signatures[0] 的 base58；若仍为零表示本服务不是 fee payer，返回 None）
             let tx_id = if tx.signatures[0] != default_sig {
                 Some(bs58::encode(tx.signatures[0].as_ref()).into_string())
             } else {
                 None
             };
 
-            // 步骤 10: 序列化并返回
+            // 步骤 9: 序列化并返回
             let signed_bytes = bincode::serialize(&tx)
                 .map_err(|e| WalletError::InvalidTransaction(format!("serialize failed: {e}")))?;
             Ok((signed_bytes, tx_id))
@@ -1575,7 +1601,9 @@ cargo test -p wallet-server extractor
 #[derive(Deserialize, ToSchema)]
 struct SignSolanaRequest {
     /// 请求唯一标识，原样透传至响应
-    request_id: String,
+    /// 必填；若缺失，返回 400 `missing_request_id`（不含 request_id）
+    #[serde(default)]
+    request_id: Option<String>,
     /// 输入交易的编码格式，枚举值：`"base64"` 或 `"base58"`
     encoding: String,
     /// 完整 Solana 交易，已含 recent_blockhash；编码格式由 encoding 字段指定
@@ -1667,12 +1695,12 @@ mod solana_sign_tests {
                 "transaction": "abc"
             }))
             .await;
-        // request_id 缺失，返回 422（字段类型不匹配/缺失）或 400
-        assert!(resp.status_code() == 400 || resp.status_code() == 422);
+        // request_id 字段缺失：serde default 将其设为 None，业务层返回 400 missing_request_id
+        assert_eq!(resp.status_code(), 400);
         let body: serde_json::Value = resp.json();
-        // 不含 request_id（因为没能解析出来）
-        // 如果使用自定义 extractor，返回 invalid_body
-        // 业务层校验需在 request_id 为空字符串时返回 400 missing_request_id
+        assert_eq!(body["error"], "missing_request_id");
+        // 此错误不含 request_id 字段（没有可透传的值）
+        assert!(body.get("request_id").is_none());
     }
 
     #[tokio::test]
@@ -1752,6 +1780,31 @@ mod solana_sign_tests {
         let body: serde_json::Value = resp.json();
         assert_eq!(body["request_id"], "my-trace-id");
     }
+
+    #[tokio::test]
+    async fn sign_solana_wallet_not_found_returns_404() {
+        // 已解锁但没有保存 Solana 钱包，只有 EVM 钱包
+        let dir = tempfile::tempdir().unwrap();
+        let state = AppState::new(dir.path().to_path_buf());
+        let password = "test-pass";
+        let keys = wallet_core::evm_wallet::generate_keypair();
+        state.wallet.save_wallet(&wallet_core::Network::Eth, &keys, password).unwrap();
+        state.wallet.unlock(password).await.unwrap();
+        let server = TestServer::new(router(state)).unwrap();
+
+        let resp = server
+            .post("/api/wallet/sign/solana")
+            .json(&serde_json::json!({
+                "request_id": "req-1",
+                "encoding": "base64",
+                "transaction": "AAAA"
+            }))
+            .await;
+        assert_eq!(resp.status_code(), 404);
+        let body: serde_json::Value = resp.json();
+        assert_eq!(body["error"], "wallet_not_found");
+        assert_eq!(body["request_id"], "req-1");
+    }
 }
 ```
 
@@ -1762,14 +1815,15 @@ async fn sign_solana(
     State(state): State<AppState>,
     ValidatedJson(req): ValidatedJson<SignSolanaRequest>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    // 1. 校验 request_id 非空
-    if req.request_id.is_empty() {
-        return (
+    // 1. 校验 request_id 存在且非空（缺失或为空字符串均返回 400）
+    let rid = match req.request_id.as_deref() {
+        Some(id) if !id.is_empty() => id.to_string(),
+        _ => return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": "missing_request_id"})),
-        );
-    }
-    let rid = &req.request_id;
+        ),
+    };
+    let rid = rid.as_str();
 
     // 2. 检查钱包是否解锁
     if !state.wallet.is_unlocked().await {
@@ -1852,6 +1906,7 @@ async fn sign_solana(
     let signed_tx_b58 = bs58::encode(&signed_bytes).into_string();
 
     // 7. 发送 Telegram 通知
+    // 注：transaction 传入完整 base58 字符串；截断（前60字符）由 format_sign_message 内部完成
     let signed_at = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
     let event = wallet_core::notification::SignEvent::Solana {
         tx_id: tx_id.clone(),
@@ -1895,7 +1950,9 @@ cargo test -p wallet-server solana_sign_tests
 #[derive(Deserialize, ToSchema)]
 struct SignEvmTransactionRequest {
     /// 请求唯一标识，原样透传至响应
-    request_id: String,
+    /// 必填；若缺失，返回 400 `missing_request_id`（不含 request_id）
+    #[serde(default)]
+    request_id: Option<String>,
     /// 目标网络：eth | bnb | arb | polygon
     network: String,
     /// 未签名的完整 EVM 交易；RLP 编码转 hex，含 0x 前缀；含零签名字段
@@ -1909,6 +1966,9 @@ struct SignEvmTransactionResponse {
     /// 透传自请求的网络标识
     network: String,
     /// 签名后的完整 EVM 交易；RLP 编码转 hex，含 0x 前缀
+    /// 除 v/r/s 签名字段外，其余字段（含 chainId）与输入完全一致
+    /// （Type 0 Legacy 无 chainId 时会注入 network 对应的 chainId；
+    ///  Type 1/2 若 chainId 与 network 不一致则已在校验阶段拒绝，不会到达此处）
     transaction: String,
 }
 ```
@@ -2063,6 +2123,32 @@ mod evm_tx_sign_tests {
         assert_eq!(body["error"], "invalid_transaction");
         assert_eq!(body["request_id"], "req-1");
     }
+
+    #[tokio::test]
+    async fn sign_evm_tx_wallet_not_found_returns_404() {
+        // 已解锁但没有保存 polygon 钱包，只有 eth 钱包
+        let dir = tempfile::tempdir().unwrap();
+        let state = AppState::new(dir.path().to_path_buf());
+        let password = "test-pass";
+        let keys = wallet_core::evm_wallet::generate_keypair();
+        state.wallet.save_wallet(&wallet_core::Network::Eth, &keys, password).unwrap();
+        state.wallet.unlock(password).await.unwrap();
+        let server = TestServer::new(router(state)).unwrap();
+
+        let tx_hex = make_unsigned_type2_hex(137); // polygon chainId
+        let resp = server
+            .post("/api/wallet/sign/evm/transaction")
+            .json(&serde_json::json!({
+                "request_id": "req-1",
+                "network": "polygon",
+                "transaction": tx_hex
+            }))
+            .await;
+        assert_eq!(resp.status_code(), 404);
+        let body: serde_json::Value = resp.json();
+        assert_eq!(body["error"], "wallet_not_found");
+        assert_eq!(body["request_id"], "req-1");
+    }
 }
 ```
 
@@ -2073,11 +2159,12 @@ async fn sign_evm_transaction(
     State(state): State<AppState>,
     ValidatedJson(req): ValidatedJson<SignEvmTransactionRequest>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    if req.request_id.is_empty() {
-        return (StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "missing_request_id"})));
-    }
-    let rid = &req.request_id;
+    let rid = match req.request_id.as_deref() {
+        Some(id) if !id.is_empty() => id.to_string(),
+        _ => return (StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "missing_request_id"}))),
+    };
+    let rid = rid.as_str();
 
     // 1. 解析 network
     let network = match crate::util::parse_network(&req.network) {
@@ -2187,7 +2274,9 @@ cargo test -p wallet-server evm_tx_sign_tests
 #[derive(Deserialize, ToSchema)]
 struct SignEvmTypedDataRequest {
     /// 请求唯一标识，原样透传至响应
-    request_id: String,
+    /// 必填；若缺失，返回 400 `missing_request_id`（不含 request_id）
+    #[serde(default)]
+    request_id: Option<String>,
     /// 目标网络：eth | bnb | arb | polygon
     network: String,
     /// 标准 EIP-712 结构（对齐 eth_signTypedData_v4），含 domain/types/primaryType/message
@@ -2395,6 +2484,31 @@ mod eip712_sign_tests {
             .await;
         assert_eq!(resp.status_code(), 200);
     }
+
+    #[tokio::test]
+    async fn sign_eip712_wallet_not_found_returns_404() {
+        // 已解锁但没有保存 bnb 钱包，只有 eth 钱包
+        let dir = tempfile::tempdir().unwrap();
+        let state = AppState::new(dir.path().to_path_buf());
+        let password = "test-pass";
+        let keys = wallet_core::evm_wallet::generate_keypair();
+        state.wallet.save_wallet(&wallet_core::Network::Eth, &keys, password).unwrap();
+        state.wallet.unlock(password).await.unwrap();
+        let server = TestServer::new(router(state)).unwrap();
+
+        let resp = server
+            .post("/api/wallet/sign/evm/typed-data")
+            .json(&serde_json::json!({
+                "request_id": "req-1",
+                "network": "bnb",
+                "typed_data": valid_typed_data(56)
+            }))
+            .await;
+        assert_eq!(resp.status_code(), 404);
+        let body: serde_json::Value = resp.json();
+        assert_eq!(body["error"], "wallet_not_found");
+        assert_eq!(body["request_id"], "req-1");
+    }
 }
 ```
 
@@ -2405,11 +2519,12 @@ async fn sign_evm_typed_data(
     State(state): State<AppState>,
     ValidatedJson(req): ValidatedJson<SignEvmTypedDataRequest>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    if req.request_id.is_empty() {
-        return (StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "missing_request_id"})));
-    }
-    let rid = &req.request_id;
+    let rid = match req.request_id.as_deref() {
+        Some(id) if !id.is_empty() => id.to_string(),
+        _ => return (StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "missing_request_id"}))),
+    };
+    let rid = rid.as_str();
 
     // 1. 解析 network（只接受 EVM 网络）
     let network = match crate::util::parse_network(&req.network) {
@@ -2455,6 +2570,7 @@ async fn sign_evm_typed_data(
     };
 
     // 5. 发送 Telegram 通知
+    // 注：typed_data_json 传入完整 JSON 字符串；截断（前500字符）由 format_sign_message 内部完成
     let signed_at = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
     let typed_data_json_str = serde_json::to_string(&req.typed_data)
         .unwrap_or_else(|_| "<serialize error>".to_string());
@@ -2561,6 +2677,22 @@ cargo test -p wallet-server eip712_sign_tests
     ))
 )]
 pub struct ApiDoc;
+
+/// 通用错误响应体。
+/// 解析阶段错误（415 / 400 empty_body / 400 malformed_json / 422 invalid_body）
+/// 不含 request_id，因为此时请求体尚未解析成功。
+/// 所有业务层错误均含 request_id。
+#[derive(Serialize, ToSchema)]
+struct ErrorResponse {
+    /// 错误码，取值见接口文档错误码规范表
+    error: String,
+    /// 错误详情（部分错误可选）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
+    /// 透传自请求的唯一标识；解析阶段错误时此字段不存在
+    #[serde(skip_serializing_if = "Option::is_none")]
+    request_id: Option<String>,
+}
 ```
 
 在每个新 handler 上添加 `#[utoipa::path(...)]` 注解（参考现有 `get_address` 的写法）：
@@ -2573,7 +2705,11 @@ pub struct ApiDoc;
     request_body = SignSolanaRequest,
     responses(
         (status = 200, description = "签名成功", body = SignSolanaResponse),
-        (status = 400, description = "参数错误（encoding/transaction/request_id）", body = ErrorResponse),
+        (status = 400, description = "参数错误（encoding/transaction/request_id）或解析错误；解析错误响应不含 request_id", body = ErrorResponse),
+        (status = 404, description = "该网络无对应钱包", body = ErrorResponse),
+        (status = 415, description = "Content-Type 不是 application/json；响应不含 request_id", body = ErrorResponse),
+        (status = 422, description = "请求体字段类型错误；响应不含 request_id", body = ErrorResponse),
+        (status = 500, description = "签名内部错误", body = ErrorResponse),
         (status = 503, description = "钱包未解锁", body = ErrorResponse),
     ),
     summary = "Solana 交易签名",
@@ -2589,7 +2725,11 @@ pub struct ApiDoc;
     request_body = SignEvmTransactionRequest,
     responses(
         (status = 200, description = "签名成功", body = SignEvmTransactionResponse),
-        (status = 400, description = "参数错误", body = ErrorResponse),
+        (status = 400, description = "参数错误或解析错误；解析错误响应不含 request_id", body = ErrorResponse),
+        (status = 404, description = "该网络无对应钱包", body = ErrorResponse),
+        (status = 415, description = "Content-Type 不是 application/json；响应不含 request_id", body = ErrorResponse),
+        (status = 422, description = "请求体字段类型错误；响应不含 request_id", body = ErrorResponse),
+        (status = 500, description = "签名内部错误", body = ErrorResponse),
         (status = 503, description = "钱包未解锁", body = ErrorResponse),
     ),
     summary = "EVM 交易签名",
@@ -2605,7 +2745,11 @@ pub struct ApiDoc;
     request_body = SignEvmTypedDataRequest,
     responses(
         (status = 200, description = "签名成功", body = SignEvmTypedDataResponse),
-        (status = 400, description = "参数错误", body = ErrorResponse),
+        (status = 400, description = "参数错误或解析错误；解析错误响应不含 request_id", body = ErrorResponse),
+        (status = 404, description = "该网络无对应钱包", body = ErrorResponse),
+        (status = 415, description = "Content-Type 不是 application/json；响应不含 request_id", body = ErrorResponse),
+        (status = 422, description = "请求体字段类型错误；响应不含 request_id", body = ErrorResponse),
+        (status = 500, description = "签名内部错误", body = ErrorResponse),
         (status = 503, description = "钱包未解锁", body = ErrorResponse),
     ),
     summary = "EIP-712 结构化数据签名",
@@ -2740,9 +2884,15 @@ use crate::extractor::ValidatedJson;
 
 在 Task 4 的 4.5 节中，需要在 `wallet-core/src/network.rs` 中新增 `chain_id()` 方法。这是 Task 4 的一部分。
 
-### Q6: `base64` 在 wallet-server 中如何使用？
+### Q6: `base64` 和 `bs58` 在 wallet-server 中如何使用？
 
-`wallet-server` 依赖 `wallet-core`，而 `wallet-core` 已有 `base64 = "0.22"`。在 handler 中通过 `use base64::Engine;` 使用即可。但 `wallet-server/Cargo.toml` 中也可能需要单独添加 `base64 = "0.22"`。
+`wallet-server/Cargo.toml` 中必须直接声明 `base64 = "0.22"` 和 `bs58 = "0.5"`（已在 Task 0 中完成）。不要依赖 `wallet-core` 的间接依赖，Rust 不保证子依赖对上层 crate 可见。在 handler 中通过以下方式使用：
+
+```rust
+use base64::Engine as _;
+// 编解码：base64::engine::general_purpose::STANDARD.encode(...) / .decode(...)
+// bs58 解码：bs58::decode(...).into_vec()?
+```
 
 ### Q7: Solana `VersionedTransaction` 序列化顺序
 

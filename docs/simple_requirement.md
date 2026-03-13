@@ -34,8 +34,14 @@
 ### REST API 接口设计
 REST API 接口通过本地 9293 端口提供服务，支持以下接口：
 1. `GET /api/wallet/address` - 获取钱包地址
-2. `POST /api/wallet/sign` - 对交易进行签名
-3. `GET /api/wallet/balance` - 获取钱包余额
+2. `GET /api/wallet/balance` - 获取钱包余额
+3. `POST /api/wallet/sign/solana` - Solana 交易签名（支持 base64/base58 输入，返回 base58 编码的已签名交易）
+4. `POST /api/wallet/sign/evm/transaction` - EVM 交易签名（支持 Legacy/EIP-2930/EIP-1559，输入输出均为 hex 编码）
+5. `POST /api/wallet/sign/evm/typed-data` - EIP-712 结构化数据签名（返回完整签名及 r/s/v 分量）
+
+> **Breaking Change (v2.0.0):** `POST /api/wallet/sign` 已移除，请迁移到上述三个专用签名接口。
+
+所有签名接口均需提供 `request_id`（必填）和 `network`（Solana 接口除外）字段，并要求钱包处于已解锁状态。
 
 
 ### 钱包服务实现代码

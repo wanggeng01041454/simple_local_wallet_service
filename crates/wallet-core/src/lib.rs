@@ -9,3 +9,4 @@ pub mod wallet;
 
 pub use network::Network;
 pub use wallet::WalletManager;
+pub use wallet::WalletKeys;
