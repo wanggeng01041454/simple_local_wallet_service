@@ -314,12 +314,15 @@ async fn get_balance(
     request_body = SignSolanaRequest,
     responses(
         (status = 200, description = "签名成功", body = SignSolanaResponse),
-        (status = 400, description = "请求参数错误", body = ErrorResponse),
+        (status = 400, description = "请求参数错误（含 missing_request_id / invalid_encoding / invalid_transaction / already_signed / signer_not_required）", body = ErrorResponse),
         (status = 404, description = "该网络尚未创建钱包", body = ErrorResponse),
+        (status = 415, description = "Content-Type 不是 application/json，响应不含 request_id", body = ErrorResponse),
+        (status = 422, description = "JSON 结构正确但字段类型不匹配，响应不含 request_id", body = ErrorResponse),
+        (status = 500, description = "内部签名错误", body = ErrorResponse),
         (status = 503, description = "钱包未解锁", body = ErrorResponse),
     ),
     summary = "Solana 交易签名",
-    description = "对 Solana 交易进行签名，支持 base64 和 base58 编码输入，返回 base58 编码的已签名交易。",
+    description = "对 Solana 交易进行签名，支持 base64 和 base58 编码输入，返回 base58 编码的已签名交易。\n\n注意：415 和 422 错误发生在请求解析阶段，响应中不含 request_id，这是预期行为。",
 )]
 async fn sign_solana(
     State(state): State<AppState>,
@@ -441,12 +444,15 @@ async fn sign_solana(
     request_body = SignEvmTransactionRequest,
     responses(
         (status = 200, description = "签名成功", body = SignEvmTransactionResponse),
-        (status = 400, description = "请求参数错误", body = ErrorResponse),
+        (status = 400, description = "请求参数错误（含 missing_request_id / invalid_network / invalid_transaction / already_signed / chain_id_mismatch / unsupported_tx_type）", body = ErrorResponse),
         (status = 404, description = "该网络尚未创建钱包", body = ErrorResponse),
+        (status = 415, description = "Content-Type 不是 application/json，响应不含 request_id", body = ErrorResponse),
+        (status = 422, description = "JSON 结构正确但字段类型不匹配，响应不含 request_id", body = ErrorResponse),
+        (status = 500, description = "内部签名错误", body = ErrorResponse),
         (status = 503, description = "钱包未解锁", body = ErrorResponse),
     ),
     summary = "EVM 交易签名",
-    description = "对 EVM 交易（Legacy/EIP-2930/EIP-1559）进行签名，返回 hex 编码的已签名交易。",
+    description = "对 EVM 交易（Legacy/EIP-2930/EIP-1559）进行签名，返回 hex 编码的已签名交易。\n\n注意：415 和 422 错误发生在请求解析阶段，响应中不含 request_id，这是预期行为。",
 )]
 async fn sign_evm_transaction(
     State(state): State<AppState>,
@@ -566,12 +572,15 @@ async fn sign_evm_transaction(
     request_body = SignEvmTypedDataRequest,
     responses(
         (status = 200, description = "签名成功", body = SignEvmTypedDataResponse),
-        (status = 400, description = "请求参数错误", body = ErrorResponse),
+        (status = 400, description = "请求参数错误（含 missing_request_id / invalid_network / invalid_typed_data / chain_id_mismatch）", body = ErrorResponse),
         (status = 404, description = "该网络尚未创建钱包", body = ErrorResponse),
+        (status = 415, description = "Content-Type 不是 application/json，响应不含 request_id", body = ErrorResponse),
+        (status = 422, description = "JSON 结构正确但字段类型不匹配，响应不含 request_id", body = ErrorResponse),
+        (status = 500, description = "内部签名错误", body = ErrorResponse),
         (status = 503, description = "钱包未解锁", body = ErrorResponse),
     ),
     summary = "EIP-712 结构化数据签名",
-    description = "对 EIP-712 typed data 进行签名，返回完整 ECDSA 签名及 r/s/v 分量。",
+    description = "对 EIP-712 typed data 进行签名，返回完整 ECDSA 签名及 r/s/v 分量。\n\n注意：415 和 422 错误发生在请求解析阶段，响应中不含 request_id，这是预期行为。",
 )]
 async fn sign_evm_typed_data(
     State(state): State<AppState>,

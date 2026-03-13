@@ -55,6 +55,13 @@ pub fn sign_transaction(
     match variant {
         TxVariant::Legacy(mut tx) => {
             let num_required = tx.message.header.num_required_signatures as usize;
+            if tx.signatures.len() < num_required {
+                return Err(WalletError::InvalidTransaction(format!(
+                    "transaction has {} signature slot(s) but {} are required",
+                    tx.signatures.len(),
+                    num_required
+                )));
+            }
             let required_signers = &tx.message.account_keys[..num_required];
             let signer_index = required_signers
                 .iter()
@@ -90,6 +97,13 @@ pub fn sign_transaction(
         TxVariant::Versioned(mut vtx) => {
             let header = vtx.message.header();
             let num_required = header.num_required_signatures as usize;
+            if vtx.signatures.len() < num_required {
+                return Err(WalletError::InvalidTransaction(format!(
+                    "transaction has {} signature slot(s) but {} are required",
+                    vtx.signatures.len(),
+                    num_required
+                )));
+            }
             let static_keys = vtx.message.static_account_keys();
 
             let required_signers = &static_keys[..num_required];
@@ -255,6 +269,24 @@ mod tests {
         let garbage = b"not a transaction";
         let result = sign_transaction(&kp.to_bytes(), garbage);
         assert!(matches!(result, Err(WalletError::InvalidTransaction(_))));
+    }
+
+    #[test]
+    fn sign_transaction_insufficient_signature_slots_returns_invalid_transaction() {
+        // Craft a transaction whose signatures vec is shorter than num_required_signatures.
+        // This can arise from a truncated / malformed serialized transaction.
+        let kp = SolanaKeypair::new();
+        let mut tx = Transaction::default();
+        // Claim 2 required signers but provide only 1 (empty) signature slot
+        tx.message.header.num_required_signatures = 2;
+        tx.message.account_keys = vec![kp.pubkey(), solana_sdk::pubkey::Pubkey::new_unique()];
+        tx.signatures = vec![solana_sdk::signature::Signature::default()]; // 1 slot < 2 required
+        let bytes = bincode::serialize(&tx).unwrap();
+        let result = sign_transaction(&kp.to_bytes(), &bytes);
+        assert!(
+            matches!(result, Err(WalletError::InvalidTransaction(_))),
+            "expected InvalidTransaction for insufficient signature slots"
+        );
     }
 
     #[test]

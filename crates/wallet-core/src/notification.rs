@@ -2,12 +2,13 @@ use tracing::{error, info};
 
 // ---- 工具函数 ----
 
-/// 转义 Telegram Markdown v1 特殊字符：* _ ` [ ]
+/// 转义 Telegram Markdown v1 特殊字符：_ * [ ] ( ) ~ ` > # + - = | { } . !
 pub fn escape_markdown(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
+    let mut out = String::with_capacity(text.len() + 16);
     for c in text.chars() {
         match c {
-            '*' | '_' | '`' | '[' | ']' => {
+            '_' | '*' | '[' | ']' | '(' | ')' | '~' | '`' | '>' | '#' | '+'
+            | '-' | '=' | '|' | '{' | '}' | '.' | '!' => {
                 out.push('\\');
                 out.push(c);
             }
@@ -59,32 +60,36 @@ pub enum SignEvent {
 pub fn format_sign_message(event: &SignEvent) -> String {
     match event {
         SignEvent::Solana { tx_id, transaction, signed_at } => {
-            let txid_str = tx_id.as_deref().unwrap_or("N/A");
-            let tx_display = truncate_str(transaction, 60);
-            let tx_escaped = escape_markdown(&tx_display);
+            let txid_escaped = escape_markdown(tx_id.as_deref().unwrap_or("N/A"));
+            // Escape user data first, then truncate so the "..." marker stays unescaped
+            let tx_full_escaped = escape_markdown(transaction);
+            let tx_display = truncate_str(&tx_full_escaped, 60);
             format!(
                 "*[Solana 签名]*\nTxID: `{}`\n交易: `{}`\n时间: {}",
-                txid_str, tx_escaped, signed_at
+                txid_escaped, tx_display, signed_at
             )
         }
         SignEvent::EvmTransaction { network, from, to, value, signed_at } => {
-            let to_str = to.as_deref().unwrap_or("N/A (contract creation)");
+            let from_escaped = escape_markdown(from);
+            let to_escaped = escape_markdown(to.as_deref().unwrap_or("N/A (contract creation)"));
+            let value_escaped = escape_markdown(value);
             format!(
                 "*[EVM 签名]*\n网络: {}\nFrom: `{}`\nTo: `{}`\nValue: {} wei\n时间: {}",
-                network, from, to_str, value, signed_at
+                network, from_escaped, to_escaped, value_escaped, signed_at
             )
         }
         SignEvent::EvmTypedData { network, typed_data_json, signed_at } => {
-            let truncated = if typed_data_json.chars().count() > 500 {
-                let s: String = typed_data_json.chars().take(500).collect();
+            // Escape user data first, then add truncation marker (template text, not escaped)
+            let escaped_data = escape_markdown(typed_data_json);
+            let display = if escaped_data.chars().count() > 500 {
+                let s: String = escaped_data.chars().take(500).collect();
                 format!("{}...（已截断）", s)
             } else {
-                typed_data_json.clone()
+                escaped_data
             };
-            let escaped = escape_markdown(&truncated);
             format!(
                 "*[EIP-712 签名]*\n网络: {}\n数据: `{}`\n时间: {}",
-                network, escaped, signed_at
+                network, display, signed_at
             )
         }
     }
@@ -160,6 +165,17 @@ mod tests {
     #[test]
     fn escape_markdown_leaves_normal_text_unchanged() {
         assert_eq!(escape_markdown("hello world 123"), "hello world 123");
+    }
+
+    #[test]
+    fn escape_markdown_escapes_extended_set() {
+        // Spot-check the newly added characters
+        assert_eq!(escape_markdown("(a)"), "\\(a\\)");
+        assert_eq!(escape_markdown("a.b"), "a\\.b");
+        assert_eq!(escape_markdown("a!b"), "a\\!b");
+        assert_eq!(escape_markdown("a~b"), "a\\~b");
+        assert_eq!(escape_markdown("a>b"), "a\\>b");
+        assert_eq!(escape_markdown("a|b"), "a\\|b");
     }
 
     // --- truncate_str ---

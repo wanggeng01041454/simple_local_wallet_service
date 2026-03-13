@@ -57,12 +57,12 @@ where
         }
 
         // 3. 先验证 JSON 语法
-        if serde_json::from_slice::<serde_json::Value>(&bytes).is_err() {
+        if let Err(e) = serde_json::from_slice::<serde_json::Value>(&bytes) {
             return Err((
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({
                     "error": "malformed_json",
-                    "message": "request body is not valid JSON"
+                    "message": e.to_string()
                 })),
             )
                 .into_response());

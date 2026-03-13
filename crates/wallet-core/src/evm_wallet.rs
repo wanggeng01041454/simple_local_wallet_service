@@ -579,7 +579,9 @@ mod tests {
         assert_eq!(sig_bytes.len(), 65);
         let r = U256::from_be_slice(&sig_bytes[..32]);
         let s = U256::from_be_slice(&sig_bytes[32..64]);
-        let parity = sig_bytes[64] != 0;
+        // alloy serializes v as 27 (0x1b) or 28 (0x1c); normalize to recovery id (0 or 1)
+        let v_byte = sig_bytes[64];
+        let parity = if v_byte >= 27 { v_byte - 27 != 0 } else { v_byte != 0 };
         let sig = AlloySignature::new(r, s, parity);
 
         let recovered = sig.recover_address_from_prehash(&hash).unwrap();
