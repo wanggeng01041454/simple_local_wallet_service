@@ -962,6 +962,14 @@ mod tests {
                 signed_vtx.signatures[0], default_sig,
                 "fee payer signature slot should be filled after signing"
             );
+
+            // Signature must be cryptographically valid against the message
+            let fee_payer_pubkey = signed_vtx.message.static_account_keys()[0];
+            let message_bytes = signed_vtx.message.serialize();
+            assert!(
+                signed_vtx.signatures[0].verify(fee_payer_pubkey.as_ref(), &message_bytes),
+                "VersionedTransaction fee payer signature should be cryptographically valid"
+            );
         }
 
         #[tokio::test]
