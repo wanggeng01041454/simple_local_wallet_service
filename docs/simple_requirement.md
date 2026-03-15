@@ -38,10 +38,12 @@ REST API 接口通过本地 9293 端口提供服务，支持以下接口：
 3. `POST /api/wallet/sign/solana` - Solana 交易签名（支持 base64/base58 输入，返回 base58 编码的已签名交易）
 4. `POST /api/wallet/sign/evm/transaction` - EVM 交易签名（支持 Legacy/EIP-2930/EIP-1559，输入输出均为 hex 编码）
 5. `POST /api/wallet/sign/evm/typed-data` - EIP-712 结构化数据签名（返回完整签名及 r/s/v 分量）
+6. `POST /api/wallet/sign/solana/message` - Solana 任意消息签名（Ed25519，原始字节，无前缀）
+7. `POST /api/wallet/sign/evm/message` - EVM 任意消息签名（EIP-191 personal_sign，keccak256 哈希后 ECDSA）
 
 > **Breaking Change (v2.0.0):** `POST /api/wallet/sign` 已移除，请迁移到上述三个专用签名接口。
 
-所有签名接口均需提供 `request_id`（必填）和 `network`（Solana 接口除外）字段，并要求钱包处于已解锁状态。
+所有签名接口均需提供 `request_id`（必填）和 `network`（Solana 交易签名和 Solana 消息签名接口除外）字段，并要求钱包处于已解锁状态。
 
 
 ### 钱包服务实现代码

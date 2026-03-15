@@ -1,7 +1,7 @@
 use crate::wallet::{WalletError, WalletKeys};
 use alloy::consensus::{SignableTransaction, TxEnvelope};
 use alloy::eips::eip2718::{Decodable2718, Encodable2718};
-use alloy::primitives::{B256, TxKind, U256};
+use alloy::primitives::{eip191_hash_message, B256, TxKind, U256};
 use alloy::signers::local::PrivateKeySigner;
 use alloy::signers::SignerSync;
 
@@ -247,6 +247,39 @@ pub fn sign_typed_data(
     let v = format!("0x{:02x}", sig_bytes[64]);
 
     Ok((signature, r, s, v))
+}
+
+#[derive(Debug)]
+pub struct EvmMessageSignature {
+    pub message_hash: String,
+    pub signature: String,
+    pub r: String,
+    pub s: String,
+    pub v: String,
+}
+
+pub fn sign_message(private_key_bytes: &[u8], msg_bytes: &[u8]) -> Result<EvmMessageSignature, WalletError> {
+    if private_key_bytes.len() != 32 {
+        return Err(WalletError::InvalidTransaction("key must be 32 bytes".to_string()));
+    }
+    let key = B256::from_slice(private_key_bytes);
+    let signer = PrivateKeySigner::from_bytes(&key)
+        .map_err(|e| WalletError::InvalidTransaction(e.to_string()))?;
+
+    let hash = eip191_hash_message(msg_bytes);
+
+    let sig = signer
+        .sign_hash_sync(&hash)
+        .map_err(|e| WalletError::InvalidTransaction(e.to_string()))?;
+
+    let sig_bytes = sig.as_bytes();
+    let message_hash = format!("0x{}", hex::encode(hash.as_slice()));
+    let signature = format!("0x{}", hex::encode(&sig_bytes));
+    let r = format!("0x{}", hex::encode(&sig_bytes[..32]));
+    let s = format!("0x{}", hex::encode(&sig_bytes[32..64]));
+    let v = format!("0x{:02x}", sig_bytes[64]);
+
+    Ok(EvmMessageSignature { message_hash, signature, r, s, v })
 }
 
 pub fn import_from_bytes(bytes: &[u8]) -> Result<WalletKeys, WalletError> {
@@ -530,6 +563,61 @@ mod tests {
         let (sig1, _, _, _) = sign_typed_data(&kp.private_key_bytes, &json, 1).unwrap();
         let (sig2, _, _, _) = sign_typed_data(&kp.private_key_bytes, &json, 1).unwrap();
         assert_eq!(sig1, sig2);
+    }
+
+    // --- sign_message tests ---
+
+    #[test]
+    fn sign_message_signature_lengths_correct() {
+        let kp = generate_keypair();
+        let result = sign_message(&kp.private_key_bytes, b"hello world").unwrap();
+        assert_eq!(result.signature.len(), 132);
+        assert_eq!(result.r.len(), 66);
+        assert_eq!(result.s.len(), 66);
+        assert!(result.v == "0x1b" || result.v == "0x1c");
+    }
+
+    #[test]
+    fn sign_message_hash_matches_eip191() {
+        let kp = generate_keypair();
+        let msg = b"test message";
+        let result = sign_message(&kp.private_key_bytes, msg).unwrap();
+        let expected_hash = eip191_hash_message(msg);
+        let expected_hex = format!("0x{}", hex::encode(expected_hash.as_slice()));
+        assert_eq!(result.message_hash, expected_hex);
+    }
+
+    #[test]
+    fn sign_message_signer_recoverable() {
+        let kp = generate_keypair();
+        let msg = b"recover me";
+        let result = sign_message(&kp.private_key_bytes, msg).unwrap();
+
+        let sig_bytes = hex::decode(result.signature.trim_start_matches("0x")).unwrap();
+        assert_eq!(sig_bytes.len(), 65);
+        let r = U256::from_be_slice(&sig_bytes[..32]);
+        let s = U256::from_be_slice(&sig_bytes[32..64]);
+        let v_byte = sig_bytes[64];
+        let parity = if v_byte >= 27 { v_byte - 27 != 0 } else { v_byte != 0 };
+        let sig = AlloySignature::new(r, s, parity);
+
+        let hash_bytes = hex::decode(result.message_hash.trim_start_matches("0x")).unwrap();
+        let hash = B256::from_slice(&hash_bytes);
+        let recovered = sig.recover_address_from_prehash(&hash).unwrap();
+        assert_eq!(recovered.to_checksum(None).to_lowercase(), kp.address.to_lowercase());
+    }
+
+    #[test]
+    fn sign_message_empty_bytes_succeeds() {
+        let kp = generate_keypair();
+        let result = sign_message(&kp.private_key_bytes, b"");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn sign_message_invalid_key_returns_error() {
+        let result = sign_message(&[0u8; 16], b"hello");
+        assert!(matches!(result, Err(WalletError::InvalidTransaction(_))));
     }
 
     // --- chainId as decimal string ---

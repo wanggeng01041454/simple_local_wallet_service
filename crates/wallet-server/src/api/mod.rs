@@ -1,6 +1,7 @@
 use axum::{
     extract::{Query, State},
     http::StatusCode,
+    response::IntoResponse,
     routing::{get, post},
     Json, Router,
 };
@@ -26,13 +27,13 @@ use crate::util::parse_network;
 #[openapi(
     info(
         title = "Simple Local Wallet Service API",
-        description = "本地钱包服务的对外 API（端口 9293），提供多链钱包地址查询、余额查询和交易签名功能。\n\n支持的网络：solana、eth、bnb、arb、polygon\n\n**注意**：所有签名接口均要求 request_id 字段（必填）和钱包处于已解锁状态。解析错误响应不含 request_id。",
+        description = "本地钱包服务的对外 API（端口 9293），提供多链钱包地址查询、余额查询、交易签名和消息签名功能。\n\n支持的网络：solana、eth、bnb、arb、polygon\n\n签名接口：\n- POST /api/wallet/sign/solana — Solana 交易签名\n- POST /api/wallet/sign/evm/transaction — EVM 交易签名\n- POST /api/wallet/sign/evm/typed-data — EIP-712 签名\n- POST /api/wallet/sign/solana/message — Solana 任意消息签名\n- POST /api/wallet/sign/evm/message — EVM 任意消息签名（EIP-191）\n\n**注意**：所有签名接口均要求 request_id 字段（必填）和钱包处于已解锁状态。解析错误响应不含 request_id。",
         version = "2.0.0",
     ),
     servers(
         (url = "http://127.0.0.1:9293", description = "本地 API 服务"),
     ),
-    paths(get_address, get_balance, sign_solana, sign_evm_transaction, sign_evm_typed_data),
+    paths(get_address, get_balance, sign_solana, sign_evm_transaction, sign_evm_typed_data, sign_solana_message, sign_evm_message),
     components(schemas(
         Network,
         TokenBalance,
@@ -44,6 +45,10 @@ use crate::util::parse_network;
         SignEvmTransactionResponse,
         SignEvmTypedDataRequest,
         SignEvmTypedDataResponse,
+        SignSolanaMessageRequest,
+        SignSolanaMessageResponse,
+        SignEvmMessageRequest,
+        SignEvmMessageResponse,
         ErrorResponse,
     ))
 )]
@@ -60,6 +65,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/wallet/sign/solana", post(sign_solana))
         .route("/api/wallet/sign/evm/transaction", post(sign_evm_transaction))
         .route("/api/wallet/sign/evm/typed-data", post(sign_evm_typed_data))
+        .route("/api/wallet/sign/solana/message", post(sign_solana_message))
+        .route("/api/wallet/sign/evm/message", post(sign_evm_message))
         .route("/api/docs/openapi.json", get(serve_openapi))
         .with_state(state)
 }
@@ -180,6 +187,62 @@ struct SignEvmTypedDataResponse {
     /// 签名 r 分量（32 字节，hex + 0x 前缀，共 66 字符）
     r: String,
     /// 签名 s 分量（32 字节，hex + 0x 前缀，共 66 字符）
+    s: String,
+    /// 签名 v 分量（1 字节，hex + 0x 前缀，如 "0x1b" 或 "0x1c"）
+    v: String,
+}
+
+// --- Solana Message ---
+
+#[derive(Deserialize, ToSchema)]
+struct SignSolanaMessageRequest {
+    /// 请求唯一标识，原样透传至响应
+    #[serde(default)]
+    #[schema(required = true, value_type = String)]
+    request_id: Option<String>,
+    /// 消息编码格式：utf8 | base58 | base64 | hex
+    encoding: String,
+    /// 待签名的消息内容
+    message: String,
+}
+
+#[derive(Serialize, ToSchema)]
+struct SignSolanaMessageResponse {
+    /// 透传自请求的唯一标识
+    request_id: String,
+    /// Ed25519 签名（base58 编码，64 字节）
+    signature: String,
+}
+
+// --- EVM Message ---
+
+#[derive(Deserialize, ToSchema)]
+struct SignEvmMessageRequest {
+    /// 请求唯一标识，原样透传至响应
+    #[serde(default)]
+    #[schema(required = true, value_type = String)]
+    request_id: Option<String>,
+    /// 目标网络：eth | bnb | arb | polygon
+    network: String,
+    /// 消息编码格式：utf8 | hex
+    encoding: String,
+    /// 待签名的消息内容
+    message: String,
+}
+
+#[derive(Serialize, ToSchema)]
+struct SignEvmMessageResponse {
+    /// 透传自请求的唯一标识
+    request_id: String,
+    /// 透传自请求的网络标识
+    network: String,
+    /// EIP-191 消息哈希（keccak256，hex + 0x 前缀，66 字符）
+    message_hash: String,
+    /// 完整 ECDSA 签名（65 字节，hex + 0x 前缀，132 字符）
+    signature: String,
+    /// 签名 r 分量（32 字节，hex + 0x 前缀，66 字符）
+    r: String,
+    /// 签名 s 分量（32 字节，hex + 0x 前缀，66 字符）
     s: String,
     /// 签名 v 分量（1 字节，hex + 0x 前缀，如 "0x1b" 或 "0x1c"）
     v: String,
@@ -674,6 +737,243 @@ async fn sign_evm_typed_data(
     )
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/wallet/sign/solana/message",
+    request_body = SignSolanaMessageRequest,
+    responses(
+        (status = 200, description = "签名成功", body = SignSolanaMessageResponse),
+        (status = 400, description = "请求参数错误（含 missing_request_id / invalid_encoding / invalid_message）", body = ErrorResponse),
+        (status = 404, description = "该网络尚未创建钱包", body = ErrorResponse),
+        (status = 415, description = "Content-Type 不是 application/json，响应不含 request_id", body = ErrorResponse),
+        (status = 422, description = "JSON 结构正确但字段类型不匹配，响应不含 request_id", body = ErrorResponse),
+        (status = 500, description = "内部签名错误", body = ErrorResponse),
+        (status = 503, description = "钱包未解锁", body = ErrorResponse),
+    ),
+    summary = "Solana 任意消息签名",
+    description = "对任意消息进行 Ed25519 签名（原始字节，无前缀），返回 base58 编码的签名。\n\n注意：415 和 422 错误发生在请求解析阶段，响应中不含 request_id，这是预期行为。",
+)]
+async fn sign_solana_message(
+    State(state): State<AppState>,
+    ValidatedJson(req): ValidatedJson<SignSolanaMessageRequest>,
+) -> axum::response::Response {
+    let rid = match req.request_id.as_deref() {
+        Some(id) if !id.is_empty() => id.to_string(),
+        _ => return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "missing_request_id"})),
+        ).into_response(),
+    };
+    let rid = rid.as_str();
+
+    let encoding = req.encoding.as_str();
+    match encoding {
+        "utf8" | "base58" | "base64" | "hex" => {}
+        _ => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+            "error": "invalid_encoding",
+            "request_id": rid
+        }))).into_response(),
+    }
+
+    let msg_bytes = match encoding {
+        "utf8" => req.message.as_bytes().to_vec(),
+        "base64" => match base64::engine::general_purpose::STANDARD.decode(&req.message) {
+            Ok(b) => b,
+            Err(_) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+                "error": "invalid_message", "message": "base64 decode failed", "request_id": rid
+            }))).into_response(),
+        },
+        "base58" => match bs58::decode(&req.message).into_vec() {
+            Ok(b) => b,
+            Err(_) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+                "error": "invalid_message", "message": "base58 decode failed", "request_id": rid
+            }))).into_response(),
+        },
+        "hex" => {
+            if !req.message.starts_with("0x") {
+                return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+                    "error": "invalid_message", "message": "hex must start with 0x", "request_id": rid
+                }))).into_response();
+            }
+            match hex::decode(&req.message[2..]) {
+                Ok(b) => b,
+                Err(_) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+                    "error": "invalid_message", "message": "hex decode failed", "request_id": rid
+                }))).into_response(),
+            }
+        }
+        _ => unreachable!(),
+    };
+
+    if !state.wallet.is_unlocked().await {
+        state.send_telegram(&format_locked_message("sign/solana/message")).await;
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "wallet_locked", "request_id": rid})),
+        ).into_response();
+    }
+
+    let private_key = match state.wallet.get_private_key_bytes(&wallet_core::Network::Solana).await {
+        Ok(k) => k,
+        Err(wallet_core::wallet::WalletError::NotFound(_)) => return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "wallet_not_found", "request_id": rid})),
+        ).into_response(),
+        Err(wallet_core::wallet::WalletError::Locked) => return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "wallet_locked", "request_id": rid})),
+        ).into_response(),
+        Err(e) => return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "sign_failed", "message": e.to_string(), "request_id": rid})),
+        ).into_response(),
+    };
+
+    let sig_bytes = match wallet_core::solana_wallet::sign_message(&private_key, &msg_bytes) {
+        Ok(s) => s,
+        Err(e) => return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "sign_failed", "message": e.to_string(), "request_id": rid})),
+        ).into_response(),
+    };
+
+    let signature = bs58::encode(&sig_bytes).into_string();
+
+    let signed_at = Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
+    let event = wallet_core::notification::SignEvent::SolanaMessage {
+        message_preview: req.message.clone(),
+        signed_at,
+    };
+    state.send_telegram(&wallet_core::notification::format_sign_message(&event)).await;
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "request_id": rid,
+            "signature": signature,
+        })),
+    ).into_response()
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/wallet/sign/evm/message",
+    request_body = SignEvmMessageRequest,
+    responses(
+        (status = 200, description = "签名成功", body = SignEvmMessageResponse),
+        (status = 400, description = "请求参数错误（含 missing_request_id / invalid_encoding / invalid_network / invalid_message）", body = ErrorResponse),
+        (status = 404, description = "该网络尚未创建钱包", body = ErrorResponse),
+        (status = 415, description = "Content-Type 不是 application/json，响应不含 request_id", body = ErrorResponse),
+        (status = 422, description = "JSON 结构正确但字段类型不匹配，响应不含 request_id", body = ErrorResponse),
+        (status = 500, description = "内部签名错误", body = ErrorResponse),
+        (status = 503, description = "钱包未解锁", body = ErrorResponse),
+    ),
+    summary = "EVM 任意消息签名",
+    description = "对任意消息进行 EIP-191 personal_sign 签名，返回 keccak256 哈希和 ECDSA 签名。\n\n注意：415 和 422 错误发生在请求解析阶段，响应中不含 request_id，这是预期行为。",
+)]
+async fn sign_evm_message(
+    State(state): State<AppState>,
+    ValidatedJson(req): ValidatedJson<SignEvmMessageRequest>,
+) -> axum::response::Response {
+    let rid = match req.request_id.as_deref() {
+        Some(id) if !id.is_empty() => id.to_string(),
+        _ => return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "missing_request_id"})),
+        ).into_response(),
+    };
+    let rid = rid.as_str();
+
+    let encoding = req.encoding.as_str();
+    match encoding {
+        "utf8" | "hex" => {}
+        _ => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+            "error": "invalid_encoding",
+            "request_id": rid
+        }))).into_response(),
+    }
+
+    let network = match crate::util::parse_network(&req.network) {
+        Some(n) if n != wallet_core::Network::Solana => n,
+        _ => return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "invalid_network", "request_id": rid})),
+        ).into_response(),
+    };
+
+    let msg_bytes = match encoding {
+        "utf8" => req.message.as_bytes().to_vec(),
+        "hex" => {
+            if !req.message.starts_with("0x") {
+                return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+                    "error": "invalid_message", "message": "hex must start with 0x", "request_id": rid
+                }))).into_response();
+            }
+            match hex::decode(&req.message[2..]) {
+                Ok(b) => b,
+                Err(_) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+                    "error": "invalid_message", "message": "hex decode failed", "request_id": rid
+                }))).into_response(),
+            }
+        }
+        _ => unreachable!(),
+    };
+
+    if !state.wallet.is_unlocked().await {
+        state.send_telegram(&format_locked_message("sign/evm/message")).await;
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "wallet_locked", "request_id": rid})),
+        ).into_response();
+    }
+
+    let private_key = match state.wallet.get_private_key_bytes(&network).await {
+        Ok(k) => k,
+        Err(wallet_core::wallet::WalletError::NotFound(_)) => return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "wallet_not_found", "request_id": rid})),
+        ).into_response(),
+        Err(wallet_core::wallet::WalletError::Locked) => return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "wallet_locked", "request_id": rid})),
+        ).into_response(),
+        Err(e) => return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "sign_failed", "message": e.to_string(), "request_id": rid})),
+        ).into_response(),
+    };
+
+    let result = match wallet_core::evm_wallet::sign_message(&private_key, &msg_bytes) {
+        Ok(r) => r,
+        Err(e) => return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "sign_failed", "message": e.to_string(), "request_id": rid})),
+        ).into_response(),
+    };
+
+    let signed_at = Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
+    let event = wallet_core::notification::SignEvent::EvmMessage {
+        network: network.display_name().to_string(),
+        message_hash: result.message_hash.clone(),
+        message_preview: req.message.clone(),
+        signed_at,
+    };
+    state.send_telegram(&wallet_core::notification::format_sign_message(&event)).await;
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "request_id": rid,
+            "network": req.network,
+            "message_hash": result.message_hash,
+            "signature": result.signature,
+            "r": result.r,
+            "s": result.s,
+            "v": result.v
+        })),
+    ).into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -774,6 +1074,22 @@ mod tests {
         assert!(
             evm_td_req["required"].as_array().unwrap().iter().any(|v| v == "request_id"),
             "SignEvmTypedDataRequest.request_id must be required"
+        );
+
+        // New message signing paths registered
+        assert!(body["paths"]["/api/wallet/sign/solana/message"].is_object());
+        assert!(body["paths"]["/api/wallet/sign/evm/message"].is_object());
+
+        // request_id is required in new message signing schemas
+        let solana_msg_req = &schemas["SignSolanaMessageRequest"];
+        let evm_msg_req = &schemas["SignEvmMessageRequest"];
+        assert!(
+            solana_msg_req["required"].as_array().unwrap().iter().any(|v| v == "request_id"),
+            "SignSolanaMessageRequest.request_id must be required"
+        );
+        assert!(
+            evm_msg_req["required"].as_array().unwrap().iter().any(|v| v == "request_id"),
+            "SignEvmMessageRequest.request_id must be required"
         );
     }
 
@@ -1458,6 +1774,651 @@ mod tests {
             assert_eq!(resp.status_code(), 200);
             let body: serde_json::Value = resp.json();
             assert_eq!(body["signature"].as_str().unwrap().len(), 132);
+        }
+    }
+
+    mod solana_message_sign_tests {
+        use super::*;
+        use axum_test::TestServer;
+        use solana_sdk::signature::Keypair as SolanaKeypair;
+        use solana_sdk::signer::Signer;
+
+        async fn unlocked_server_with_solana() -> (TestServer, tempfile::TempDir, SolanaKeypair) {
+            let dir = tempfile::tempdir().unwrap();
+            let state = AppState::new(dir.path().to_path_buf());
+            let password = "test-pass";
+            let kp = SolanaKeypair::new();
+            let keys = wallet_core::WalletKeys {
+                private_key_bytes: kp.to_bytes().to_vec(),
+                address: kp.pubkey().to_string(),
+            };
+            state
+                .wallet
+                .save_wallet(&wallet_core::Network::Solana, &keys, password)
+                .unwrap();
+            state.wallet.unlock(password).await.unwrap();
+            let app = router(state);
+            (TestServer::new(app).unwrap(), dir, kp)
+        }
+
+        // --- Contract tests (parsing layer, no request_id) ---
+
+        #[tokio::test]
+        async fn sign_solana_message_unsupported_media_type_returns_415() {
+            let (server, _dir, _kp) = unlocked_server_with_solana().await;
+            let resp = server
+                .post("/api/wallet/sign/solana/message")
+                .content_type("text/plain")
+                .bytes(axum::body::Bytes::from_static(b"{}"))
+                .await;
+            assert_eq!(resp.status_code(), 415);
+            let body: serde_json::Value = resp.json();
+            assert_eq!(body["error"], "unsupported_media_type");
+            assert!(body.get("request_id").is_none());
+        }
+
+        #[tokio::test]
+        async fn sign_solana_message_empty_body_returns_400() {
+            let (server, _dir, _kp) = unlocked_server_with_solana().await;
+            let resp = server
+                .post("/api/wallet/sign/solana/message")
+                .content_type("application/json")
+                .bytes(axum::body::Bytes::new())
+                .await;
+            assert_eq!(resp.status_code(), 400);
+            let body: serde_json::Value = resp.json();
+            assert_eq!(body["error"], "empty_body");
+            assert!(body.get("request_id").is_none());
+        }
+
+        #[tokio::test]
+        async fn sign_solana_message_malformed_json_returns_400() {
+            let (server, _dir, _kp) = unlocked_server_with_solana().await;
+            let resp = server
+                .post("/api/wallet/sign/solana/message")
+                .content_type("application/json")
+                .bytes(axum::body::Bytes::from_static(b"{ not valid json"))
+                .await;
+            assert_eq!(resp.status_code(), 400);
+            let body: serde_json::Value = resp.json();
+            assert_eq!(body["error"], "malformed_json");
+            assert!(body.get("request_id").is_none());
+        }
+
+        #[tokio::test]
+        async fn sign_solana_message_invalid_body_returns_422() {
+            let (server, _dir, _kp) = unlocked_server_with_solana().await;
+            let resp = server
+                .post("/api/wallet/sign/solana/message")
+                .json(&serde_json::json!({"encoding": 123}))
+                .await;
+            assert_eq!(resp.status_code(), 422);
+            let body: serde_json::Value = resp.json();
+            assert_eq!(body["error"], "invalid_body");
+            assert!(body.get("request_id").is_none());
+        }
+
+        // --- Business tests ---
+
+        #[tokio::test]
+        async fn sign_solana_message_missing_request_id_returns_400() {
+            let (server, _dir, _kp) = unlocked_server_with_solana().await;
+            let resp = server
+                .post("/api/wallet/sign/solana/message")
+                .json(&serde_json::json!({"encoding": "utf8", "message": "hello"}))
+                .await;
+            assert_eq!(resp.status_code(), 400);
+            let body: serde_json::Value = resp.json();
+            assert_eq!(body["error"], "missing_request_id");
+            assert!(body.get("request_id").is_none());
+        }
+
+        #[tokio::test]
+        async fn sign_solana_message_utf8_success_signature_verifiable() {
+            let (server, _dir, kp) = unlocked_server_with_solana().await;
+            let msg = "hello solana";
+            let resp = server
+                .post("/api/wallet/sign/solana/message")
+                .json(&serde_json::json!({
+                    "request_id": "req-1",
+                    "encoding": "utf8",
+                    "message": msg
+                }))
+                .await;
+            assert_eq!(resp.status_code(), 200);
+            let body: serde_json::Value = resp.json();
+            assert_eq!(body["request_id"], "req-1");
+
+            let sig_str = body["signature"].as_str().unwrap();
+            let sig_bytes = bs58::decode(sig_str).into_vec().unwrap();
+            assert_eq!(sig_bytes.len(), 64);
+
+            let sig = solana_sdk::signature::Signature::try_from(sig_bytes.as_slice()).unwrap();
+            assert!(sig.verify(kp.pubkey().as_ref(), msg.as_bytes()));
+        }
+
+        #[tokio::test]
+        async fn sign_solana_message_base64_success_signature_verifiable() {
+            let (server, _dir, kp) = unlocked_server_with_solana().await;
+            let raw_msg = b"hello base64";
+            let b64_msg = base64::engine::general_purpose::STANDARD.encode(raw_msg);
+            let resp = server
+                .post("/api/wallet/sign/solana/message")
+                .json(&serde_json::json!({
+                    "request_id": "req-1",
+                    "encoding": "base64",
+                    "message": b64_msg
+                }))
+                .await;
+            assert_eq!(resp.status_code(), 200);
+            let body: serde_json::Value = resp.json();
+            let sig_bytes = bs58::decode(body["signature"].as_str().unwrap()).into_vec().unwrap();
+            assert_eq!(sig_bytes.len(), 64);
+
+            let sig = solana_sdk::signature::Signature::try_from(sig_bytes.as_slice()).unwrap();
+            assert!(sig.verify(kp.pubkey().as_ref(), raw_msg));
+        }
+
+        #[tokio::test]
+        async fn sign_solana_message_hex_success() {
+            let (server, _dir, _kp) = unlocked_server_with_solana().await;
+            let resp = server
+                .post("/api/wallet/sign/solana/message")
+                .json(&serde_json::json!({
+                    "request_id": "req-1",
+                    "encoding": "hex",
+                    "message": "0x68656c6c6f"
+                }))
+                .await;
+            assert_eq!(resp.status_code(), 200);
+        }
+
+        #[tokio::test]
+        async fn sign_solana_message_base58_success() {
+            let (server, _dir, _kp) = unlocked_server_with_solana().await;
+            let b58_msg = bs58::encode(b"hello").into_string();
+            let resp = server
+                .post("/api/wallet/sign/solana/message")
+                .json(&serde_json::json!({
+                    "request_id": "req-1",
+                    "encoding": "base58",
+                    "message": b58_msg
+                }))
+                .await;
+            assert_eq!(resp.status_code(), 200);
+        }
+
+        #[tokio::test]
+        async fn sign_solana_message_utf8_and_hex_same_bytes_same_signature() {
+            let (server, _dir, _kp) = unlocked_server_with_solana().await;
+            let msg = "hello";
+            let hex_msg = format!("0x{}", hex::encode(msg.as_bytes()));
+
+            let resp1 = server
+                .post("/api/wallet/sign/solana/message")
+                .json(&serde_json::json!({
+                    "request_id": "req-1",
+                    "encoding": "utf8",
+                    "message": msg
+                }))
+                .await;
+            let resp2 = server
+                .post("/api/wallet/sign/solana/message")
+                .json(&serde_json::json!({
+                    "request_id": "req-2",
+                    "encoding": "hex",
+                    "message": hex_msg
+                }))
+                .await;
+
+            let sig1 = resp1.json::<serde_json::Value>()["signature"].as_str().unwrap().to_string();
+            let sig2 = resp2.json::<serde_json::Value>()["signature"].as_str().unwrap().to_string();
+            assert_eq!(sig1, sig2);
+        }
+
+        #[tokio::test]
+        async fn sign_solana_message_invalid_encoding_returns_400() {
+            let (server, _dir, _kp) = unlocked_server_with_solana().await;
+            let resp = server
+                .post("/api/wallet/sign/solana/message")
+                .json(&serde_json::json!({
+                    "request_id": "req-1",
+                    "encoding": "invalid",
+                    "message": "hello"
+                }))
+                .await;
+            assert_eq!(resp.status_code(), 400);
+            let body: serde_json::Value = resp.json();
+            assert_eq!(body["error"], "invalid_encoding");
+            assert_eq!(body["request_id"], "req-1");
+        }
+
+        #[tokio::test]
+        async fn sign_solana_message_invalid_hex_returns_400() {
+            let (server, _dir, _kp) = unlocked_server_with_solana().await;
+            let resp = server
+                .post("/api/wallet/sign/solana/message")
+                .json(&serde_json::json!({
+                    "request_id": "req-1",
+                    "encoding": "hex",
+                    "message": "0xZZZZ"
+                }))
+                .await;
+            assert_eq!(resp.status_code(), 400);
+            let body: serde_json::Value = resp.json();
+            assert_eq!(body["error"], "invalid_message");
+            assert_eq!(body["request_id"], "req-1");
+        }
+
+        #[tokio::test]
+        async fn sign_solana_message_invalid_base64_returns_400() {
+            let (server, _dir, _kp) = unlocked_server_with_solana().await;
+            let resp = server
+                .post("/api/wallet/sign/solana/message")
+                .json(&serde_json::json!({
+                    "request_id": "req-1",
+                    "encoding": "base64",
+                    "message": "!!!not-base64!!!"
+                }))
+                .await;
+            assert_eq!(resp.status_code(), 400);
+            let body: serde_json::Value = resp.json();
+            assert_eq!(body["error"], "invalid_message");
+            assert_eq!(body["request_id"], "req-1");
+        }
+
+        #[tokio::test]
+        async fn sign_solana_message_locked_returns_503() {
+            let dir = tempfile::tempdir().unwrap();
+            let state = AppState::new(dir.path().to_path_buf());
+            let server = TestServer::new(router(state)).unwrap();
+            let resp = server
+                .post("/api/wallet/sign/solana/message")
+                .json(&serde_json::json!({
+                    "request_id": "req-1",
+                    "encoding": "utf8",
+                    "message": "hello"
+                }))
+                .await;
+            assert_eq!(resp.status_code(), 503);
+            let body: serde_json::Value = resp.json();
+            assert_eq!(body["error"], "wallet_locked");
+            assert_eq!(body["request_id"], "req-1");
+        }
+
+        #[tokio::test]
+        async fn sign_solana_message_wallet_not_found_returns_404() {
+            let dir = tempfile::tempdir().unwrap();
+            let state = AppState::new(dir.path().to_path_buf());
+            let password = "test-pass";
+            let keys = wallet_core::evm_wallet::generate_keypair();
+            state
+                .wallet
+                .save_wallet(&wallet_core::Network::Eth, &keys, password)
+                .unwrap();
+            state.wallet.unlock(password).await.unwrap();
+            let server = TestServer::new(router(state)).unwrap();
+
+            let resp = server
+                .post("/api/wallet/sign/solana/message")
+                .json(&serde_json::json!({
+                    "request_id": "req-1",
+                    "encoding": "utf8",
+                    "message": "hello"
+                }))
+                .await;
+            assert_eq!(resp.status_code(), 404);
+            let body: serde_json::Value = resp.json();
+            assert_eq!(body["error"], "wallet_not_found");
+            assert_eq!(body["request_id"], "req-1");
+        }
+    }
+
+    mod evm_message_sign_tests {
+        use super::*;
+        use axum_test::TestServer;
+
+        async fn unlocked_eth_server() -> (TestServer, tempfile::TempDir) {
+            let dir = tempfile::tempdir().unwrap();
+            let state = AppState::new(dir.path().to_path_buf());
+            let password = "test-pass";
+            let keys = wallet_core::evm_wallet::generate_keypair();
+            state
+                .wallet
+                .save_wallet(&wallet_core::Network::Eth, &keys, password)
+                .unwrap();
+            state.wallet.unlock(password).await.unwrap();
+            (TestServer::new(router(state)).unwrap(), dir)
+        }
+
+        // --- Contract tests (parsing layer, no request_id) ---
+
+        #[tokio::test]
+        async fn sign_evm_message_unsupported_media_type_returns_415() {
+            let (server, _dir) = unlocked_eth_server().await;
+            let resp = server
+                .post("/api/wallet/sign/evm/message")
+                .content_type("text/plain")
+                .bytes(axum::body::Bytes::from_static(b"{}"))
+                .await;
+            assert_eq!(resp.status_code(), 415);
+            assert!(resp.json::<serde_json::Value>().get("request_id").is_none());
+        }
+
+        #[tokio::test]
+        async fn sign_evm_message_empty_body_returns_400() {
+            let (server, _dir) = unlocked_eth_server().await;
+            let resp = server
+                .post("/api/wallet/sign/evm/message")
+                .content_type("application/json")
+                .bytes(axum::body::Bytes::new())
+                .await;
+            assert_eq!(resp.status_code(), 400);
+            let body: serde_json::Value = resp.json();
+            assert_eq!(body["error"], "empty_body");
+            assert!(body.get("request_id").is_none());
+        }
+
+        #[tokio::test]
+        async fn sign_evm_message_malformed_json_returns_400() {
+            let (server, _dir) = unlocked_eth_server().await;
+            let resp = server
+                .post("/api/wallet/sign/evm/message")
+                .content_type("application/json")
+                .bytes(axum::body::Bytes::from_static(b"{ not valid json"))
+                .await;
+            assert_eq!(resp.status_code(), 400);
+            let body: serde_json::Value = resp.json();
+            assert_eq!(body["error"], "malformed_json");
+            assert!(body.get("request_id").is_none());
+        }
+
+        #[tokio::test]
+        async fn sign_evm_message_invalid_body_returns_422() {
+            let (server, _dir) = unlocked_eth_server().await;
+            let resp = server
+                .post("/api/wallet/sign/evm/message")
+                .json(&serde_json::json!({"encoding": 123}))
+                .await;
+            assert_eq!(resp.status_code(), 422);
+            let body: serde_json::Value = resp.json();
+            assert_eq!(body["error"], "invalid_body");
+            assert!(body.get("request_id").is_none());
+        }
+
+        // --- Business tests ---
+
+        #[tokio::test]
+        async fn sign_evm_message_missing_request_id_returns_400() {
+            let (server, _dir) = unlocked_eth_server().await;
+            let resp = server
+                .post("/api/wallet/sign/evm/message")
+                .json(&serde_json::json!({
+                    "network": "eth",
+                    "encoding": "utf8",
+                    "message": "hello"
+                }))
+                .await;
+            assert_eq!(resp.status_code(), 400);
+            let body: serde_json::Value = resp.json();
+            assert_eq!(body["error"], "missing_request_id");
+        }
+
+        #[tokio::test]
+        async fn sign_evm_message_utf8_success_signer_recoverable() {
+            let (server, _dir) = unlocked_eth_server().await;
+            let msg = "hello evm";
+            let resp = server
+                .post("/api/wallet/sign/evm/message")
+                .json(&serde_json::json!({
+                    "request_id": "req-1",
+                    "network": "eth",
+                    "encoding": "utf8",
+                    "message": msg
+                }))
+                .await;
+            assert_eq!(resp.status_code(), 200);
+            let body: serde_json::Value = resp.json();
+            assert_eq!(body["request_id"], "req-1");
+            assert_eq!(body["network"], "eth");
+
+            let sig_hex = body["signature"].as_str().unwrap();
+            let hash_hex = body["message_hash"].as_str().unwrap();
+            assert_eq!(sig_hex.len(), 132);
+            assert_eq!(hash_hex.len(), 66);
+
+            // Verify ecrecover
+            let sig_bytes = hex::decode(sig_hex.trim_start_matches("0x")).unwrap();
+            let hash_bytes = hex::decode(hash_hex.trim_start_matches("0x")).unwrap();
+            let r = alloy::primitives::U256::from_be_slice(&sig_bytes[..32]);
+            let s = alloy::primitives::U256::from_be_slice(&sig_bytes[32..64]);
+            let v_byte = sig_bytes[64];
+            let parity = if v_byte >= 27 { v_byte - 27 != 0 } else { v_byte != 0 };
+            let sig = alloy::primitives::Signature::new(r, s, parity);
+            let hash = alloy::primitives::B256::from_slice(&hash_bytes);
+            let recovered = sig.recover_address_from_prehash(&hash).unwrap();
+
+            // Get the service address
+            let addr_resp = server
+                .get("/api/wallet/address")
+                .add_query_param("network", "eth")
+                .await;
+            let addr = addr_resp.json::<serde_json::Value>()["address"].as_str().unwrap().to_string();
+            assert_eq!(recovered.to_checksum(None).to_lowercase(), addr.to_lowercase());
+        }
+
+        #[tokio::test]
+        async fn sign_evm_message_hex_success_signer_recoverable() {
+            let (server, _dir) = unlocked_eth_server().await;
+            let msg_bytes = b"hello hex evm";
+            let hex_msg = format!("0x{}", hex::encode(msg_bytes));
+            let resp = server
+                .post("/api/wallet/sign/evm/message")
+                .json(&serde_json::json!({
+                    "request_id": "req-1",
+                    "network": "eth",
+                    "encoding": "hex",
+                    "message": hex_msg
+                }))
+                .await;
+            assert_eq!(resp.status_code(), 200);
+            let body: serde_json::Value = resp.json();
+
+            let sig_hex = body["signature"].as_str().unwrap();
+            let hash_hex = body["message_hash"].as_str().unwrap();
+            let sig_bytes = hex::decode(sig_hex.trim_start_matches("0x")).unwrap();
+            let hash_bytes = hex::decode(hash_hex.trim_start_matches("0x")).unwrap();
+            let r = alloy::primitives::U256::from_be_slice(&sig_bytes[..32]);
+            let s = alloy::primitives::U256::from_be_slice(&sig_bytes[32..64]);
+            let v_byte = sig_bytes[64];
+            let parity = if v_byte >= 27 { v_byte - 27 != 0 } else { v_byte != 0 };
+            let sig = alloy::primitives::Signature::new(r, s, parity);
+            let hash = alloy::primitives::B256::from_slice(&hash_bytes);
+            let recovered = sig.recover_address_from_prehash(&hash).unwrap();
+
+            let addr_resp = server
+                .get("/api/wallet/address")
+                .add_query_param("network", "eth")
+                .await;
+            let addr = addr_resp.json::<serde_json::Value>()["address"].as_str().unwrap().to_string();
+            assert_eq!(recovered.to_checksum(None).to_lowercase(), addr.to_lowercase());
+        }
+
+        #[tokio::test]
+        async fn sign_evm_message_utf8_and_hex_same_bytes_same_signature() {
+            let (server, _dir) = unlocked_eth_server().await;
+            let msg = "hello";
+            let hex_msg = format!("0x{}", hex::encode(msg.as_bytes()));
+
+            let resp1 = server
+                .post("/api/wallet/sign/evm/message")
+                .json(&serde_json::json!({
+                    "request_id": "req-1",
+                    "network": "eth",
+                    "encoding": "utf8",
+                    "message": msg
+                }))
+                .await;
+            let resp2 = server
+                .post("/api/wallet/sign/evm/message")
+                .json(&serde_json::json!({
+                    "request_id": "req-2",
+                    "network": "eth",
+                    "encoding": "hex",
+                    "message": hex_msg
+                }))
+                .await;
+
+            let sig1 = resp1.json::<serde_json::Value>()["signature"].as_str().unwrap().to_string();
+            let sig2 = resp2.json::<serde_json::Value>()["signature"].as_str().unwrap().to_string();
+            assert_eq!(sig1, sig2);
+        }
+
+        #[tokio::test]
+        async fn sign_evm_message_hash_matches_eip191() {
+            let (server, _dir) = unlocked_eth_server().await;
+            let msg = "test message";
+            let resp = server
+                .post("/api/wallet/sign/evm/message")
+                .json(&serde_json::json!({
+                    "request_id": "req-1",
+                    "network": "eth",
+                    "encoding": "utf8",
+                    "message": msg
+                }))
+                .await;
+            assert_eq!(resp.status_code(), 200);
+            let body: serde_json::Value = resp.json();
+            let returned_hash = body["message_hash"].as_str().unwrap();
+
+            let expected_hash = alloy::primitives::eip191_hash_message(msg.as_bytes());
+            let expected_hex = format!("0x{}", hex::encode(expected_hash.as_slice()));
+            assert_eq!(returned_hash, expected_hex);
+        }
+
+        #[tokio::test]
+        async fn sign_evm_message_invalid_encoding_returns_400() {
+            let (server, _dir) = unlocked_eth_server().await;
+            let resp = server
+                .post("/api/wallet/sign/evm/message")
+                .json(&serde_json::json!({
+                    "request_id": "req-1",
+                    "network": "eth",
+                    "encoding": "base64",
+                    "message": "hello"
+                }))
+                .await;
+            assert_eq!(resp.status_code(), 400);
+            let body: serde_json::Value = resp.json();
+            assert_eq!(body["error"], "invalid_encoding");
+            assert_eq!(body["request_id"], "req-1");
+        }
+
+        #[tokio::test]
+        async fn sign_evm_message_invalid_hex_no_0x_prefix_returns_400() {
+            let (server, _dir) = unlocked_eth_server().await;
+            let resp = server
+                .post("/api/wallet/sign/evm/message")
+                .json(&serde_json::json!({
+                    "request_id": "req-1",
+                    "network": "eth",
+                    "encoding": "hex",
+                    "message": "abcdef"
+                }))
+                .await;
+            assert_eq!(resp.status_code(), 400);
+            let body: serde_json::Value = resp.json();
+            assert_eq!(body["error"], "invalid_message");
+            assert_eq!(body["request_id"], "req-1");
+        }
+
+        #[tokio::test]
+        async fn sign_evm_message_invalid_hex_bad_chars_returns_400() {
+            let (server, _dir) = unlocked_eth_server().await;
+            let resp = server
+                .post("/api/wallet/sign/evm/message")
+                .json(&serde_json::json!({
+                    "request_id": "req-1",
+                    "network": "eth",
+                    "encoding": "hex",
+                    "message": "0xZZZZ"
+                }))
+                .await;
+            assert_eq!(resp.status_code(), 400);
+            let body: serde_json::Value = resp.json();
+            assert_eq!(body["error"], "invalid_message");
+            assert_eq!(body["request_id"], "req-1");
+        }
+
+        #[tokio::test]
+        async fn sign_evm_message_invalid_network_returns_400() {
+            let (server, _dir) = unlocked_eth_server().await;
+            let resp = server
+                .post("/api/wallet/sign/evm/message")
+                .json(&serde_json::json!({
+                    "request_id": "req-1",
+                    "network": "invalid",
+                    "encoding": "utf8",
+                    "message": "hello"
+                }))
+                .await;
+            assert_eq!(resp.status_code(), 400);
+            let body: serde_json::Value = resp.json();
+            assert_eq!(body["error"], "invalid_network");
+            assert_eq!(body["request_id"], "req-1");
+        }
+
+        #[tokio::test]
+        async fn sign_evm_message_locked_returns_503() {
+            let dir = tempfile::tempdir().unwrap();
+            let state = AppState::new(dir.path().to_path_buf());
+            let server = TestServer::new(router(state)).unwrap();
+            let resp = server
+                .post("/api/wallet/sign/evm/message")
+                .json(&serde_json::json!({
+                    "request_id": "req-1",
+                    "network": "eth",
+                    "encoding": "utf8",
+                    "message": "hello"
+                }))
+                .await;
+            assert_eq!(resp.status_code(), 503);
+            let body: serde_json::Value = resp.json();
+            assert_eq!(body["error"], "wallet_locked");
+            assert_eq!(body["request_id"], "req-1");
+        }
+
+        #[tokio::test]
+        async fn sign_evm_message_wallet_not_found_returns_404() {
+            let dir = tempfile::tempdir().unwrap();
+            let state = AppState::new(dir.path().to_path_buf());
+            let password = "test-pass";
+            use solana_sdk::signer::Signer;
+            let kp = solana_sdk::signature::Keypair::new();
+            let keys = wallet_core::WalletKeys {
+                private_key_bytes: kp.to_bytes().to_vec(),
+                address: kp.pubkey().to_string(),
+            };
+            state
+                .wallet
+                .save_wallet(&wallet_core::Network::Solana, &keys, password)
+                .unwrap();
+            state.wallet.unlock(password).await.unwrap();
+            let server = TestServer::new(router(state)).unwrap();
+
+            let resp = server
+                .post("/api/wallet/sign/evm/message")
+                .json(&serde_json::json!({
+                    "request_id": "req-1",
+                    "network": "eth",
+                    "encoding": "utf8",
+                    "message": "hello"
+                }))
+                .await;
+            assert_eq!(resp.status_code(), 404);
+            let body: serde_json::Value = resp.json();
+            assert_eq!(body["error"], "wallet_not_found");
+            assert_eq!(body["request_id"], "req-1");
         }
     }
 }

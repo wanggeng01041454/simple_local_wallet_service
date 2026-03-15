@@ -55,6 +55,18 @@ pub enum SignEvent {
         typed_data_json: String,
         signed_at: String,
     },
+    SolanaMessage {
+        /// request 中 message 字段原文（解码前的原始字符串）
+        message_preview: String,
+        signed_at: String,
+    },
+    EvmMessage {
+        network: String,
+        message_hash: String,
+        /// request 中 message 字段原文（解码前的原始字符串）
+        message_preview: String,
+        signed_at: String,
+    },
 }
 
 pub fn format_sign_message(event: &SignEvent) -> String {
@@ -90,6 +102,23 @@ pub fn format_sign_message(event: &SignEvent) -> String {
             format!(
                 "*[EIP-712 签名]*\n网络: {}\n数据: `{}`\n时间: {}",
                 network, display, signed_at
+            )
+        }
+        SignEvent::SolanaMessage { message_preview, signed_at } => {
+            let escaped = escape_markdown(message_preview);
+            let display = truncate_str(&escaped, 60);
+            format!(
+                "*[Solana 消息签名]*\n消息: `{}`\n时间: {}",
+                display, signed_at
+            )
+        }
+        SignEvent::EvmMessage { network, message_hash, message_preview, signed_at } => {
+            let hash_escaped = escape_markdown(message_hash);
+            let msg_escaped = escape_markdown(message_preview);
+            let msg_display = truncate_str(&msg_escaped, 60);
+            format!(
+                "*[EVM 消息签名]*\n网络: {}\n哈希: `{}`\n消息: `{}`\n时间: {}",
+                network, hash_escaped, msg_display, signed_at
             )
         }
     }
@@ -274,6 +303,41 @@ mod tests {
         let msg = format_sign_message(&event);
         assert!(msg.len() <= 4096);
         assert!(msg.contains("..."));
+    }
+
+    #[test]
+    fn format_solana_message_contains_preview() {
+        let event = SignEvent::SolanaMessage {
+            message_preview: "hello solana".to_string(),
+            signed_at: "2026-01-01 00:00:00 UTC".to_string(),
+        };
+        let msg = format_sign_message(&event);
+        assert!(msg.contains("hello solana"));
+    }
+
+    #[test]
+    fn format_solana_message_truncates_long_message() {
+        let long_msg = "A".repeat(100);
+        let event = SignEvent::SolanaMessage {
+            message_preview: long_msg,
+            signed_at: "2026-01-01 00:00:00 UTC".to_string(),
+        };
+        let msg = format_sign_message(&event);
+        assert!(msg.contains("..."));
+    }
+
+    #[test]
+    fn format_evm_message_contains_hash_and_preview() {
+        let event = SignEvent::EvmMessage {
+            network: "Ethereum".to_string(),
+            message_hash: "0xabcdef".to_string(),
+            message_preview: "hello evm".to_string(),
+            signed_at: "2026-01-01 00:00:00 UTC".to_string(),
+        };
+        let msg = format_sign_message(&event);
+        assert!(msg.contains("0xabcdef"));
+        assert!(msg.contains("hello evm"));
+        assert!(msg.contains("Ethereum"));
     }
 
     #[test]
