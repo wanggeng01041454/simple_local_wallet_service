@@ -14,7 +14,7 @@ REST API 接口通过本地 9293 端口提供服务，支持以下接口：
 7. `POST /api/wallet/sign/evm/message` - EVM 任意消息签名（EIP-191 personal_sign，keccak256 哈希后 ECDSA）
 
 > **Breaking Change (v2.0.0):** `POST /api/wallet/sign` 已移除。
-> 请迁移到以上三个新签名接口。
+> 请迁移到以上五个专用签名接口。
 
 所有签名接口均要求 `request_id` 字段（必填），且钱包处于已解锁状态。
 解析错误（如 JSON 格式错误）的响应不含 `request_id`，这是预期行为。

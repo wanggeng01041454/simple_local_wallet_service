@@ -41,7 +41,7 @@ REST API 接口通过本地 9293 端口提供服务，支持以下接口：
 6. `POST /api/wallet/sign/solana/message` - Solana 任意消息签名（Ed25519，原始字节，无前缀）
 7. `POST /api/wallet/sign/evm/message` - EVM 任意消息签名（EIP-191 personal_sign，keccak256 哈希后 ECDSA）
 
-> **Breaking Change (v2.0.0):** `POST /api/wallet/sign` 已移除，请迁移到上述三个专用签名接口。
+> **Breaking Change (v2.0.0):** `POST /api/wallet/sign` 已移除，请迁移到上述五个专用签名接口。
 
 所有签名接口均需提供 `request_id`（必填）和 `network`（Solana 交易签名和 Solana 消息签名接口除外）字段，并要求钱包处于已解锁状态。
 

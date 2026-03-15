@@ -1935,8 +1935,9 @@ mod tests {
 
         #[tokio::test]
         async fn sign_solana_message_base58_success() {
-            let (server, _dir, _kp) = unlocked_server_with_solana().await;
-            let b58_msg = bs58::encode(b"hello").into_string();
+            let (server, _dir, kp) = unlocked_server_with_solana().await;
+            let raw_msg = b"hello";
+            let b58_msg = bs58::encode(raw_msg).into_string();
             let resp = server
                 .post("/api/wallet/sign/solana/message")
                 .json(&serde_json::json!({
@@ -1946,6 +1947,12 @@ mod tests {
                 }))
                 .await;
             assert_eq!(resp.status_code(), 200);
+            let body: serde_json::Value = resp.json();
+            let sig_bytes = bs58::decode(body["signature"].as_str().unwrap()).into_vec().unwrap();
+            assert_eq!(sig_bytes.len(), 64);
+
+            let sig = solana_sdk::signature::Signature::try_from(sig_bytes.as_slice()).unwrap();
+            assert!(sig.verify(kp.pubkey().as_ref(), raw_msg));
         }
 
         #[tokio::test]
@@ -2019,6 +2026,40 @@ mod tests {
                     "request_id": "req-1",
                     "encoding": "base64",
                     "message": "!!!not-base64!!!"
+                }))
+                .await;
+            assert_eq!(resp.status_code(), 400);
+            let body: serde_json::Value = resp.json();
+            assert_eq!(body["error"], "invalid_message");
+            assert_eq!(body["request_id"], "req-1");
+        }
+
+        #[tokio::test]
+        async fn sign_solana_message_hex_no_0x_prefix_returns_400() {
+            let (server, _dir, _kp) = unlocked_server_with_solana().await;
+            let resp = server
+                .post("/api/wallet/sign/solana/message")
+                .json(&serde_json::json!({
+                    "request_id": "req-1",
+                    "encoding": "hex",
+                    "message": "68656c6c6f"
+                }))
+                .await;
+            assert_eq!(resp.status_code(), 400);
+            let body: serde_json::Value = resp.json();
+            assert_eq!(body["error"], "invalid_message");
+            assert_eq!(body["request_id"], "req-1");
+        }
+
+        #[tokio::test]
+        async fn sign_solana_message_invalid_base58_returns_400() {
+            let (server, _dir, _kp) = unlocked_server_with_solana().await;
+            let resp = server
+                .post("/api/wallet/sign/solana/message")
+                .json(&serde_json::json!({
+                    "request_id": "req-1",
+                    "encoding": "base58",
+                    "message": "0OIl!!!"
                 }))
                 .await;
             assert_eq!(resp.status_code(), 400);

@@ -117,7 +117,7 @@ pub fn format_sign_message(event: &SignEvent) -> String {
             let msg_escaped = escape_markdown(message_preview);
             let msg_display = truncate_str(&msg_escaped, 60);
             format!(
-                "*[EVM 消息签名]*\n网络: {}\n哈希: `{}`\n消息: `{}`\n时间: {}",
+                "*[EVM 消息签名]*\n网络: {}\nHash: `{}`\n消息: `{}`\n时间: {}",
                 network, hash_escaped, msg_display, signed_at
             )
         }
