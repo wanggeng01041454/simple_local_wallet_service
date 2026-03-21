@@ -1,3 +1,13 @@
+---
+# 文档类型：功能设计
+# 对应项目：Local Wallet Service
+# 版本：v2.1
+# 状态：已确认
+# 替代旧文档：无（兼容扩展 Feature-Signing-API-Design-v2.0）
+# 被新文档替代：无
+# 生效时间：2026-03-15
+---
+
 # 任意消息签名接口规范
 
 日期：2026-03-15
@@ -21,7 +31,7 @@
 - 解析阶段错误（415 / 400 empty_body / 400 malformed_json / 422）不含 `request_id`
 - 校验优先级：Content-Type → JSON 解析 → request_id → 字段合法性（encoding / network / message 解码）→ 钱包锁定 → 业务逻辑
 
-详见 `2026-03-11-signing-api-redesign.md` 全局规则章节。
+详见 `Feature-Signing-API-Design-v2.0.md` 全局规则章节。
 
 ---
 
@@ -146,7 +156,7 @@ POST /api/wallet/sign/evm/message
 
 ## 错误码
 
-复用现有规范（详见 `2026-03-11-signing-api-redesign.md`），新增：
+复用现有规范（详见 `Feature-Signing-API-Design-v2.0.md`），新增：
 
 | HTTP 状态码 | error 字段 | 是否含 request_id | 触发场景 |
 |------------|-----------|:-----------------:|---------|
@@ -213,7 +223,7 @@ Hash: `<message_hash>`
 
 ## OpenAPI 字段注释规范
 
-沿用现有约定（见 `2026-03-11-signing-api-redesign.md`），特别注意：
+沿用现有约定（见 `Feature-Signing-API-Design-v2.0.md`），特别注意：
 
 - `request_id` 字段：Rust 类型用 `Option<String>` + `#[serde(default)]`，OpenAPI 标注 `#[schema(required = true, value_type = String)]`，保证 JSON 缺字段时进入业务层再返回 `missing_request_id`（而非 422）
 - `encoding` 字段：Rust 类型用 `String`（与 `network` 字段处理方式相同），在 handler 内 `request_id` 校验之后手动 match，非法值返回 400 `invalid_encoding`（含 `request_id`）；**不使用 serde 枚举**，避免在 `request_id` 之前就触发 422
